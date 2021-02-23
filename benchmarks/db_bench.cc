@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include <sys/types.h>
-
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <sys/types.h>
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
@@ -14,8 +13,10 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/write_batch.h"
+
 #include "port/port.h"
 #include "util/crc32c.h"
+#include "util/env_cloud.h"
 #include "util/histogram.h"
 #include "util/mutexlock.h"
 #include "util/random.h"
@@ -1076,6 +1077,7 @@ int main(int argc, char** argv) {
   }
 
   leveldb::g_env = leveldb::Env::Default();
+  // leveldb::g_env = new leveldb::CloudEnv(leveldb::Env::Default());
 
   // Choose a location for the test database if none given with --db=<path>
   if (FLAGS_db == nullptr) {

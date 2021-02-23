@@ -219,6 +219,7 @@ else (WIN32)
   target_sources(leveldb
     PRIVATE
       "util/env_posix.cc"
+      "util/env_cloud.cc"
       "util/posix_logger.h"
   )
 endif (WIN32)
