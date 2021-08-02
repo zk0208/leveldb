@@ -46,6 +46,8 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build .
 ```
 
+you can use `cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=1 ..` in `build` dir to  generate **compile_commands.json** file for [clangd](https://clangd.llvm.org/).
+
 ### Building for Windows
 
 First generate the Visual Studio 2017 project/solution files:
