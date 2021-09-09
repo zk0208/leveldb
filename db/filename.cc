@@ -4,11 +4,12 @@
 
 #include "db/filename.h"
 
+#include "db/dbformat.h"
 #include <cassert>
 #include <cstdio>
 
-#include "db/dbformat.h"
 #include "leveldb/env.h"
+
 #include "util/logging.h"
 
 namespace leveldb {
@@ -33,6 +34,11 @@ std::string LogFileName(const std::string& dbname, uint64_t number) {
 std::string TableFileName(const std::string& dbname, uint64_t number) {
   assert(number > 0);
   return MakeFileName(dbname, number, "ldb");
+}
+
+std::string TableFileDataName(const std::string& dbname, uint64_t number) {
+  assert(number > 0);
+  return MakeFileName(dbname, number, "data");
 }
 
 std::string SSTTableFileName(const std::string& dbname, uint64_t number) {

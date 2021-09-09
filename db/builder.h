@@ -5,6 +5,8 @@
 #ifndef STORAGE_LEVELDB_DB_BUILDER_H_
 #define STORAGE_LEVELDB_DB_BUILDER_H_
 
+#include <vector>
+
 #include "leveldb/status.h"
 
 namespace leveldb {
@@ -24,6 +26,12 @@ class VersionEdit;
 // zero, and no Table file will be produced.
 Status BuildTable(const std::string& dbname, Env* env, const Options& options,
                   TableCache* table_cache, Iterator* iter, FileMetaData* meta);
+
+// Build a Table file from the contents of *iter of memtable.
+Status BuildTableFromMem(const std::string& dbname, Env* env,
+                         const Options& options, TableCache* table_cache,
+                         Iterator* iter,
+                         const std::vector<FileMetaData*>& files);
 
 }  // namespace leveldb
 

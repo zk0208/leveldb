@@ -5,11 +5,14 @@
 #include "leveldb/table_builder.h"
 
 #include <cassert>
+#include <deque>
+#include <vector>
 
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
+
 #include "table/block_builder.h"
 #include "table/filter_block.h"
 #include "table/format.h"
@@ -18,13 +21,18 @@
 
 namespace leveldb {
 
+struct DataBlockWithHandle {
+  BlockBuilder* data_block;
+  BlockHandle* pending_handle;
+};
+
 struct TableBuilder::Rep {
   Rep(const Options& opt, WritableFile* f)
       : options(opt),
         index_block_options(opt),
         file(f),
         offset(0),
-        data_block(&options),
+        // data_block(&options),
         index_block(&index_block_options),
         num_entries(0),
         closed(false),
@@ -35,12 +43,31 @@ struct TableBuilder::Rep {
     index_block_options.block_restart_interval = 1;
   }
 
+  Rep(const Options& opt, WritableFile* f, std::vector<WritableFile*> fs)
+      : options(opt),
+        index_block_options(opt),
+        file(f),
+        offset(0),
+        // data_block(&options),
+        index_block(&index_block_options),
+        num_entries(0),
+        closed(false),
+        filter_block(opt.filter_policy == nullptr
+                         ? nullptr
+                         : new FilterBlockBuilder(opt.filter_policy)),
+        pending_index_entry(false),
+        files(fs) {
+    index_block_options.block_restart_interval = 1;
+  }
+
   Options options;
   Options index_block_options;
   WritableFile* file;
+  std::vector<WritableFile*> files;
   uint64_t offset;
   Status status;
-  BlockBuilder data_block;
+  BlockBuilder* data_block;
+  std::deque<DataBlockWithHandle> data_block_queue;  // todo 避免拷贝，提高性能
   BlockBuilder index_block;
   std::string last_key;
   int64_t num_entries;
@@ -57,13 +84,22 @@ struct TableBuilder::Rep {
   //
   // Invariant: r->pending_index_entry is true only if data_block is empty.
   bool pending_index_entry;
-  BlockHandle pending_handle;  // Handle to add to index block
+  BlockHandle* pending_handle = nullptr;  // Handle to add to index block
+  std::deque<BlockHandle*> pending_handle_queue;  // todo 避免拷贝，提高性能
 
   std::string compressed_output;
 };
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file)
     : rep_(new Rep(options, file)) {
+  if (rep_->filter_block != nullptr) {
+    rep_->filter_block->StartBlock(0);
+  }
+}
+
+TableBuilder::TableBuilder(const Options& options, WritableFile* file,
+                           std::vector<WritableFile*> files)
+    : rep_(new Rep(options, file, files)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -99,6 +135,10 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+  if (r->data_block == nullptr) {
+    r->data_block = new BlockBuilder(&r->options);
+  }
+
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
@@ -126,13 +166,20 @@ void TableBuilder::Flush() {
   Rep* r = rep_;
   assert(!r->closed);
   if (!ok()) return;
-  if (r->data_block.empty()) return;
+  if (r->data_block->empty()) return;
   assert(!r->pending_index_entry);
-  WriteBlock(&r->data_block, &r->pending_handle);
-  if (ok()) {
-    r->pending_index_entry = true;
-    r->status = r->file->Flush();
-  }
+  BlockHandle* index_handle = new BlockHandle;
+  r->data_block_queue.emplace_back(r->data_block,
+                                   index_handle);  // datablock放到队列中去
+  r->data_block = nullptr;
+  r->pending_handle_queue.emplace_back(
+      index_handle);  // index handle放到队列中去
+  // WriteBlock(&r->data_block, &r->pending_handle);
+  // if (ok()) {
+  //   r->pending_index_entry = true;
+  //   r->status = r->file->Flush();
+  // }
+
   if (r->filter_block != nullptr) {
     r->filter_block->StartBlock(r->offset);
   }

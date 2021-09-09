@@ -38,9 +38,13 @@ class BlockHandle {
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* input);
 
+  bool isFinished() { return finished; }
+  void finish() { finished = true; }
+
  private:
   uint64_t offset_;
   uint64_t size_;
+  bool finished = false;
 };
 
 // Footer encapsulates the fixed information stored at the tail

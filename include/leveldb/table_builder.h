@@ -32,6 +32,9 @@ class LEVELDB_EXPORT TableBuilder {
   // caller to close the file after calling Finish().
   TableBuilder(const Options& options, WritableFile* file);
 
+  TableBuilder(const Options& options, WritableFile* file,
+               std::vector<WritableFile*>);
+
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
 
@@ -86,6 +89,8 @@ class LEVELDB_EXPORT TableBuilder {
 
   struct Rep;
   Rep* rep_;
+
+  struct DataBlockWithHandle;
 };
 
 }  // namespace leveldb
