@@ -4,8 +4,10 @@
 
 #include "leveldb/table_builder.h"
 
+#include <atomic>
 #include <cassert>
 #include <deque>
+#include <thread>
 #include <vector>
 
 #include "leveldb/comparator.h"
@@ -71,8 +73,11 @@ struct TableBuilder::Rep {
   BlockBuilder index_block;
   std::string last_key;
   int64_t num_entries;
-  bool closed;  // Either Finish() or Abandon() has been called.
+  std::atomic<bool> closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
+  std::mutex m;
+  std::condition_variable cv;
+  // std::atomic<bool>
 
   // We do not emit the index entry for a block until we have seen the
   // first key for the next data block.  This allows us to use shorter
@@ -102,6 +107,13 @@ TableBuilder::TableBuilder(const Options& options, WritableFile* file,
     : rep_(new Rep(options, file, files)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
+  }
+  // 创建线程
+  int threadNum = files.size();
+  for (int i = 0; i < threadNum; i++) {
+    std::thread background_thread(&TableBuilder::BackgroundThreadEntryPoint,
+                                  this);
+    background_thread.detach();
   }
 }
 
@@ -168,17 +180,20 @@ void TableBuilder::Flush() {
   if (!ok()) return;
   if (r->data_block->empty()) return;
   assert(!r->pending_index_entry);
-  BlockHandle* index_handle = new BlockHandle;
-  r->data_block_queue.emplace_back(r->data_block,
-                                   index_handle);  // datablock放到队列中去
-  r->data_block = nullptr;
-  r->pending_handle_queue.emplace_back(
-      index_handle);  // index handle放到队列中去
-  // WriteBlock(&r->data_block, &r->pending_handle);
-  // if (ok()) {
-  //   r->pending_index_entry = true;
-  //   r->status = r->file->Flush();
-  // }
+  if (r->options.multi_path) {
+    BlockHandle* index_handle = new BlockHandle;
+    r->data_block_queue.emplace_back(r->data_block,
+                                     index_handle);  // datablock放到队列中去
+    r->data_block = nullptr;
+    r->pending_handle_queue.emplace_back(
+        index_handle);  // index handle放到队列中去
+  } else {
+    WriteBlock(r->data_block, r->pending_handle);
+    if (ok()) {
+      r->pending_index_entry = true;
+      r->status = r->file->Flush();
+    }
+  }
 
   if (r->filter_block != nullptr) {
     r->filter_block->StartBlock(r->offset);
@@ -246,7 +261,13 @@ Status TableBuilder::Finish() {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
+  std::unique_lock<std::mutex> lock(r->m);
+  r->cv.wait(lock, [r] {
+    return r->data_block_queue.empty() && r->pending_handle_queue.empty();
+  });
+
   r->closed = true;
+  lock.unlock();  //确保所有的data block和对应的block handle都写下
 
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
@@ -308,5 +329,7 @@ void TableBuilder::Abandon() {
 uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
 uint64_t TableBuilder::FileSize() const { return rep_->offset; }
+
+void TableBuilder::BackgroundThreadEntryPoint() {}
 
 }  // namespace leveldb
