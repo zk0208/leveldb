@@ -68,7 +68,7 @@ struct TableBuilder::Rep {
   WritableFile* file;
   std::vector<WritableFile*> files;
   uint64_t offset;
-  Status status;
+  std::atomic<Status> status;
   BlockBuilder* data_block;
   std::deque<DataBlockWithHandle> data_block_queue;  // todo 避免拷贝，提高性能
   BlockBuilder index_block;
@@ -93,6 +93,7 @@ struct TableBuilder::Rep {
   bool pending_index_entry;
   BlockHandle* pending_handle = nullptr;  // Handle to add to index block
   std::deque<BlockHandle*> pending_handle_queue;  // todo 避免拷贝，提高性能
+  std::deque<std::string> last_key_queue;
 
   std::string compressed_output;
 };
@@ -149,17 +150,27 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
-  if (r->data_block == nullptr) {
-    r->data_block = new BlockBuilder(&r->options);
-  }
-
+  // if (r->pending_index_entry) {
+  //   assert(r->data_block->empty());
+  //   r->options.comparator->FindShortestSeparator(&r->last_key, key);
+  //   std::string handle_encoding;
+  //   r->pending_handle->EncodeTo(&handle_encoding);
+  //   r->index_block.Add(r->last_key, Slice(handle_encoding));
+  //   r->pending_index_entry = false;
+  // }
   if (r->pending_index_entry) {
     assert(r->data_block->empty());
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
-    std::string handle_encoding;
-    r->pending_handle->EncodeTo(&handle_encoding);
-    r->index_block.Add(r->last_key, Slice(handle_encoding));
+    // std::string handle_encoding;
+    // r->pending_handle->EncodeTo(&handle_encoding);
+    // r->index_block.Add(r->last_key, Slice(handle_encoding));
+    r->last_key_queue.emplace_back(
+        r->last_key);  // 考虑冲突嘛，生产者 消费者模型 todo
     r->pending_index_entry = false;
+  }
+
+  if (r->data_block == nullptr) {
+    r->data_block = new BlockBuilder(&r->options);
   }
 
   if (r->filter_block != nullptr) {
@@ -189,6 +200,7 @@ void TableBuilder::Flush() {
     r->data_block = nullptr;
     r->pending_handle_queue.emplace_back(
         index_handle);  // index handle放到队列中去
+    r->pending_index_entry = true;
   } else {
     WriteBlock(r->data_block, r->pending_handle);
     if (ok()) {
@@ -244,8 +256,14 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  int index) {
   Rep* r = rep_;
   handle->set_offset(r->offset);
-  handle->set_size(block_contents.size());
-  r->status = r->file->Append(block_contents);
+  handle->set_size(block_contents.size());  // todo 改一下
+  handle->finish();
+  if (r->options.multi_path) {
+    r->status = r->files[index]->Append(block_contents);
+  } else {
+    r->status = r->file->Append(block_contents);
+  }
+
   if (r->status.ok()) {
     char trailer[kBlockTrailerSize];
     trailer[0] = type;
@@ -344,16 +362,34 @@ void TableBuilder::BackgroundThreadEntryPoint(int index) {
   while (!r->closed) {
     std::unique_lock<std::mutex> lock(r->m);
     r->cv_withMember.wait(lock, [r] {
-      return !r->data_block_queue.empty() && !r->pending_handle_queue.empty();
+      return !r->last_key_queue.empty() && !r->data_block_queue.empty() &&
+             !r->pending_handle_queue.empty();
     });
     // 取一个出来处理
     assert(!r->data_block_queue.empty());
+    assert(!r->last_key_queue.empty());
     // TableBuilder::DataBlockWithHandle tmp = r->data_block_queue.front();
     auto dataBlockWithHandle = r->data_block_queue.front();
     r->data_block_queue.pop_front();
     lock.unlock();
     WriteBlock(dataBlockWithHandle.data_block,
                dataBlockWithHandle.pending_handle, index);
+    if (ok()) {
+      r->status = r->files[index]->Flush();  //刷新文件
+    }
+    if (index == 0) {
+      std::unique_lock<std::mutex> lock(r->m);
+      while (!r->last_key_queue.empty() && !r->pending_handle_queue.empty() &&
+             r->pending_handle_queue.front()->isFinished()) {
+        std::string handle_encoding;
+        auto pending_handle = r->pending_handle_queue.front();
+        pending_handle->EncodeTo(&handle_encoding);
+        delete pending_handle;
+        r->pending_handle_queue.pop_front();
+        r->index_block.Add(r->last_key_queue.front(), Slice(handle_encoding));
+        r->last_key_queue.pop_front();
+      }
+    }  //第一个线程负责写元数据
   }
 }
 
