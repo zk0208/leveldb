@@ -8,6 +8,7 @@
 #include "db/filename.h"
 #include "db/table_cache.h"
 #include "db/version_edit.h"
+#include <bits/stdint-uintn.h>
 
 #include "leveldb/db.h"
 #include "leveldb/env.h"
@@ -90,7 +91,7 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
 
   std::string fname = TableFileName(dbname, files[0]->number);
   std::vector<std::string> data_fnames;
-  for (int i = 0; i < options.db_paths.size(); i++) {
+  for (int i = 1; i < options.db_paths.size(); i++) {
     data_fnames.emplace_back(
         TableFileDataName(options.db_paths[i].path, files[i]->number));
   }
@@ -115,7 +116,11 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     if (!options.multi_path) {
       builder = new TableBuilder(options, file);
     } else {
-      builder = new TableBuilder(options, file, writable_files);
+      std::vector<uint64_t> file_numbers;
+      for (int i = 1; i < files.size(); i++) {
+        file_numbers.push_back(files[i]->number);
+      }
+      builder = new TableBuilder(options, file, writable_files, file_numbers);
     }
     files[0]->smallest.DecodeFrom(iter->key());
     Slice key;

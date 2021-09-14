@@ -5,6 +5,7 @@
 #ifndef STORAGE_LEVELDB_TABLE_FORMAT_H_
 #define STORAGE_LEVELDB_TABLE_FORMAT_H_
 
+#include <bits/stdint-uintn.h>
 #include <cstdint>
 #include <string>
 
@@ -23,7 +24,7 @@ struct ReadOptions;
 class BlockHandle {
  public:
   // Maximum encoding length of a BlockHandle
-  enum { kMaxEncodedLength = 10 + 10 };
+  enum { kMaxEncodedLength = 10 + 10 + 10 };
 
   BlockHandle();
 
@@ -35,6 +36,9 @@ class BlockHandle {
   uint64_t size() const { return size_; }
   void set_size(uint64_t size) { size_ = size; }
 
+  uint64_t fileNumber() const { return fNumber_; }
+  void set_file_number(uint64_t num) { fNumber_ = num; }
+
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* input);
 
@@ -42,6 +46,7 @@ class BlockHandle {
   void finish() { finished = true; }
 
  private:
+  uint64_t fNumber_;
   uint64_t offset_;
   uint64_t size_;
   bool finished = false;

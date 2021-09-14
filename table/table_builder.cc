@@ -5,6 +5,7 @@
 #include "leveldb/table_builder.h"
 
 #include <atomic>
+#include <bits/stdint-uintn.h>
 #include <cassert>
 #include <condition_variable>
 #include <deque>
@@ -34,7 +35,7 @@ struct TableBuilder::Rep {
       : options(opt),
         index_block_options(opt),
         file(f),
-        offset(0),
+        meta_offset(0),
         // data_block(&options),
         index_block(&index_block_options),
         num_entries(0),
@@ -46,11 +47,12 @@ struct TableBuilder::Rep {
     index_block_options.block_restart_interval = 1;
   }
 
-  Rep(const Options& opt, WritableFile* f, std::vector<WritableFile*> fs)
+  Rep(const Options& opt, WritableFile* f, std::vector<WritableFile*> fs,
+      std::vector<uint64_t> file_nums)
       : options(opt),
         index_block_options(opt),
         file(f),
-        offset(0),
+        meta_offset(0),
         // data_block(&options),
         index_block(&index_block_options),
         num_entries(0),
@@ -59,7 +61,8 @@ struct TableBuilder::Rep {
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
         pending_index_entry(false),
-        files(fs) {
+        files(fs),
+        file_numbers(file_nums) {
     index_block_options.block_restart_interval = 1;
   }
 
@@ -67,7 +70,10 @@ struct TableBuilder::Rep {
   Options index_block_options;
   WritableFile* file;
   std::vector<WritableFile*> files;
-  uint64_t offset;
+  std::vector<uint64_t> file_numbers;
+  // uint64_t offset;
+  uint64_t meta_offset;
+  std::vector<uint64_t> offsets;
   std::atomic<Status> status;
   BlockBuilder* data_block;
   std::deque<DataBlockWithHandle> data_block_queue;  // todo 避免拷贝，提高性能
@@ -100,20 +106,23 @@ struct TableBuilder::Rep {
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file)
     : rep_(new Rep(options, file)) {
+  rep_->offsets.push_back(0);
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
 }
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file,
-                           std::vector<WritableFile*> files)
-    : rep_(new Rep(options, file, files)) {
+                           std::vector<WritableFile*> files,
+                           std::vector<uint64_t> file_nums)
+    : rep_(new Rep(options, file, files, file_nums)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
   // 创建线程
   int threadNum = files.size();
   for (int i = 0; i < threadNum; i++) {
+    rep_->offsets.push_back(0);
     std::thread background_thread(&TableBuilder::BackgroundThreadEntryPoint,
                                   this, i);
     background_thread.detach();
@@ -201,6 +210,7 @@ void TableBuilder::Flush() {
     r->pending_handle_queue.emplace_back(
         index_handle);  // index handle放到队列中去
     r->pending_index_entry = true;
+    r->cv_withMember.notify_all();
   } else {
     WriteBlock(r->data_block, r->pending_handle);
     if (ok()) {
@@ -209,9 +219,10 @@ void TableBuilder::Flush() {
     }
   }
 
-  if (r->filter_block != nullptr) {
-    r->filter_block->StartBlock(r->offset);
-  }
+  // to do surpport bloom filter
+  // if (r->filter_block != nullptr) {
+  //   r->filter_block->StartBlock(r->offset);
+  // }
 }
 
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle,
@@ -255,10 +266,10 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle,
                                  int index) {
   Rep* r = rep_;
-  handle->set_offset(r->offset);
+  handle->set_offset(r->offsets[index]);
   handle->set_size(block_contents.size());  // todo 改一下
   handle->finish();
-  if (r->options.multi_path) {
+  if (r->options.multi_path && index != -1) {
     r->status = r->files[index]->Append(block_contents);
   } else {
     r->status = r->file->Append(block_contents);
@@ -270,14 +281,16 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
     uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
     crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
     EncodeFixed32(trailer + 1, crc32c::Mask(crc));
-    if (r->options.multi_path) {
+    if (r->options.multi_path && index != -1) {
       r->status = r->files[index]->Append(Slice(trailer, kBlockTrailerSize));
     } else {
       r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
     }
 
     if (r->status.ok()) {
-      r->offset += block_contents.size() + kBlockTrailerSize;
+      if (r->options.multi_path && index != -1) {
+        r->offsets[index] += block_contents.size() + kBlockTrailerSize;
+      }
     }
   }
 }
@@ -288,6 +301,16 @@ Status TableBuilder::Finish() {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
+
+  // Write index block
+  if (ok()) {
+    if (r->pending_index_entry) {
+      r->options.comparator->FindShortSuccessor(&r->last_key);
+      r->last_key_queue.emplace_back(r->last_key);
+      r->pending_index_entry = false;
+    }
+  }
+
   std::unique_lock<std::mutex> lock(r->m);
   r->cv_empty.wait(lock, [r] {
     return r->data_block_queue.empty() && r->pending_handle_queue.empty();
@@ -321,16 +344,19 @@ Status TableBuilder::Finish() {
   }
 
   // Write index block
-  if (ok()) {
-    if (r->pending_index_entry) {
-      r->options.comparator->FindShortSuccessor(&r->last_key);
-      std::string handle_encoding;
-      r->pending_handle->EncodeTo(&handle_encoding);
-      r->index_block.Add(r->last_key, Slice(handle_encoding));
-      r->pending_index_entry = false;
-    }
-    WriteBlock(&r->index_block, &index_block_handle);
-  }
+  // if (ok()) {
+  //   if (r->pending_index_entry) {
+  //     r->options.comparator->FindShortSuccessor(&r->last_key);
+  //     std::string handle_encoding;
+  //     r->pending_handle->EncodeTo(&handle_encoding);
+  //     r->index_block.Add(r->last_key, Slice(handle_encoding));
+  //     r->pending_index_entry = false;
+  //   }
+  //   WriteBlock(&r->index_block, &index_block_handle);
+  // }
+
+  // Write index block
+  WriteBlock(&r->index_block, &index_block_handle);
 
   // Write footer
   if (ok()) {
@@ -341,7 +367,7 @@ Status TableBuilder::Finish() {
     footer.EncodeTo(&footer_encoding);
     r->status = r->file->Append(footer_encoding);
     if (r->status.ok()) {
-      r->offset += footer_encoding.size();
+      r->meta_offset += footer_encoding.size();
     }
   }
   return r->status;
@@ -355,7 +381,13 @@ void TableBuilder::Abandon() {
 
 uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
-uint64_t TableBuilder::FileSize() const { return rep_->offset; }
+uint64_t TableBuilder::FileSize() const {  // return rep_->offset;
+  uint64_t res = rep_->meta_offset;
+  for (int i = 0; i < rep_->offsets.size(); i++) {
+    res += rep_->offsets[i];
+  }
+  return res;
+}
 
 void TableBuilder::BackgroundThreadEntryPoint(int index) {
   Rep* r = rep_;
@@ -374,6 +406,7 @@ void TableBuilder::BackgroundThreadEntryPoint(int index) {
     lock.unlock();
     WriteBlock(dataBlockWithHandle.data_block,
                dataBlockWithHandle.pending_handle, index);
+    dataBlockWithHandle.pending_handle->set_file_number(index);
     if (ok()) {
       r->status = r->files[index]->Flush();  //刷新文件
     }
@@ -390,6 +423,10 @@ void TableBuilder::BackgroundThreadEntryPoint(int index) {
         r->last_key_queue.pop_front();
       }
     }  //第一个线程负责写元数据
+    lock.lock();
+    if (r->data_block_queue.empty()) {  // 结束 唤醒
+      r->cv_empty.notify_all();
+    }
   }
 }
 

@@ -13,6 +13,7 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 #define STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 
+#include <bits/stdint-uintn.h>
 #include <cstdint>
 
 #include "leveldb/export.h"
@@ -33,7 +34,8 @@ class LEVELDB_EXPORT TableBuilder {
   TableBuilder(const Options& options, WritableFile* file);
 
   TableBuilder(const Options& options, WritableFile* file,
-               std::vector<WritableFile*>);
+               std::vector<WritableFile*> files,
+               std::vector<uint64_t> file_nums);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;
