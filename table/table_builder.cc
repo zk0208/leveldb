@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <condition_variable>
 #include <deque>
 #include <thread>
 #include <vector>
@@ -23,7 +24,7 @@
 
 namespace leveldb {
 
-struct DataBlockWithHandle {
+struct TableBuilder::DataBlockWithHandle {
   BlockBuilder* data_block;
   BlockHandle* pending_handle;
 };
@@ -76,7 +77,8 @@ struct TableBuilder::Rep {
   std::atomic<bool> closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
   std::mutex m;
-  std::condition_variable cv;
+  std::condition_variable cv_empty;
+  std::condition_variable cv_withMember;
   // std::atomic<bool>
 
   // We do not emit the index entry for a block until we have seen the
@@ -112,7 +114,7 @@ TableBuilder::TableBuilder(const Options& options, WritableFile* file,
   int threadNum = files.size();
   for (int i = 0; i < threadNum; i++) {
     std::thread background_thread(&TableBuilder::BackgroundThreadEntryPoint,
-                                  this);
+                                  this, i);
     background_thread.detach();
   }
 }
@@ -152,10 +154,10 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   }
 
   if (r->pending_index_entry) {
-    assert(r->data_block.empty());
+    assert(r->data_block->empty());
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
-    r->pending_handle.EncodeTo(&handle_encoding);
+    r->pending_handle->EncodeTo(&handle_encoding);
     r->index_block.Add(r->last_key, Slice(handle_encoding));
     r->pending_index_entry = false;
   }
@@ -166,9 +168,9 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
-  r->data_block.Add(key, value);
+  r->data_block->Add(key, value);
 
-  const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  const size_t estimated_block_size = r->data_block->CurrentSizeEstimate();
   if (estimated_block_size >= r->options.block_size) {
     Flush();
   }
@@ -200,7 +202,8 @@ void TableBuilder::Flush() {
   }
 }
 
-void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
+void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle,
+                              int index) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
   //    type: uint8
@@ -231,13 +234,14 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
       break;
     }
   }
-  WriteRawBlock(block_contents, type, handle);
+  WriteRawBlock(block_contents, type, handle, index);
   r->compressed_output.clear();
   block->Reset();
 }
 
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
-                                 CompressionType type, BlockHandle* handle) {
+                                 CompressionType type, BlockHandle* handle,
+                                 int index) {
   Rep* r = rep_;
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
@@ -248,7 +252,12 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
     uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
     crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
     EncodeFixed32(trailer + 1, crc32c::Mask(crc));
-    r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
+    if (r->options.multi_path) {
+      r->status = r->files[index]->Append(Slice(trailer, kBlockTrailerSize));
+    } else {
+      r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
+    }
+
     if (r->status.ok()) {
       r->offset += block_contents.size() + kBlockTrailerSize;
     }
@@ -262,7 +271,7 @@ Status TableBuilder::Finish() {
   Flush();
   assert(!r->closed);
   std::unique_lock<std::mutex> lock(r->m);
-  r->cv.wait(lock, [r] {
+  r->cv_empty.wait(lock, [r] {
     return r->data_block_queue.empty() && r->pending_handle_queue.empty();
   });
 
@@ -298,7 +307,7 @@ Status TableBuilder::Finish() {
     if (r->pending_index_entry) {
       r->options.comparator->FindShortSuccessor(&r->last_key);
       std::string handle_encoding;
-      r->pending_handle.EncodeTo(&handle_encoding);
+      r->pending_handle->EncodeTo(&handle_encoding);
       r->index_block.Add(r->last_key, Slice(handle_encoding));
       r->pending_index_entry = false;
     }
@@ -330,6 +339,22 @@ uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
 uint64_t TableBuilder::FileSize() const { return rep_->offset; }
 
-void TableBuilder::BackgroundThreadEntryPoint() {}
+void TableBuilder::BackgroundThreadEntryPoint(int index) {
+  Rep* r = rep_;
+  while (!r->closed) {
+    std::unique_lock<std::mutex> lock(r->m);
+    r->cv_withMember.wait(lock, [r] {
+      return !r->data_block_queue.empty() && !r->pending_handle_queue.empty();
+    });
+    // 取一个出来处理
+    assert(!r->data_block_queue.empty());
+    // TableBuilder::DataBlockWithHandle tmp = r->data_block_queue.front();
+    auto dataBlockWithHandle = r->data_block_queue.front();
+    r->data_block_queue.pop_front();
+    lock.unlock();
+    WriteBlock(dataBlockWithHandle.data_block,
+               dataBlockWithHandle.pending_handle, index);
+  }
+}
 
 }  // namespace leveldb
