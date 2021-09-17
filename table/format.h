@@ -59,7 +59,9 @@ class Footer {
   // Encoded length of a Footer.  Note that the serialization of a
   // Footer will always occupy exactly this many bytes.  It consists
   // of two block handles and a magic number.
-  enum { kEncodedLength = 2 * BlockHandle::kMaxEncodedLength + 8 };
+  enum {
+    kEncodedLength = 2 * BlockHandle::kMaxEncodedLength + 8 * 10 + 8
+  };  // colin 添加8个文件序号
 
   Footer() = default;
 
@@ -71,10 +73,16 @@ class Footer {
   const BlockHandle& index_handle() const { return index_handle_; }
   void set_index_handle(const BlockHandle& h) { index_handle_ = h; }
 
+  const std::vector<uint64_t> files() const { return fNumbers_; }
+  void set_files(const std::vector<uint64_t>& file_numbers) {
+    fNumbers_ = file_numbers;
+  }
+
   void EncodeTo(std::string* dst) const;
   Status DecodeFrom(Slice* input);
 
  private:
+  std::vector<uint64_t> fNumbers_;
   BlockHandle metaindex_handle_;
   BlockHandle index_handle_;
 };

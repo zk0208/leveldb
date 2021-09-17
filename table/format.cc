@@ -36,6 +36,11 @@ void Footer::EncodeTo(std::string* dst) const {
   metaindex_handle_.EncodeTo(dst);
   index_handle_.EncodeTo(dst);
   dst->resize(2 * BlockHandle::kMaxEncodedLength);  // Padding
+  assert(fNumbers_.size() <= 8);
+  for (auto& f : fNumbers_) {
+    PutVarint64(dst, f);
+  }
+  dst->resize(2 * BlockHandle::kMaxEncodedLength + 8 * 10);
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber & 0xffffffffu));
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber >> 32));
   assert(dst->size() == original_size + kEncodedLength);
@@ -55,6 +60,14 @@ Status Footer::DecodeFrom(Slice* input) {
   Status result = metaindex_handle_.DecodeFrom(input);
   if (result.ok()) {
     result = index_handle_.DecodeFrom(input);
+  }
+  if (result.ok()) {
+    // 有点小bug需要修复,现在定死在8个磁盘
+    uint64_t tmp;
+    for (int i = 0; i < 8; i++) {
+      GetVarint64(input, &tmp);
+      fNumbers_.push_back(tmp);
+    }
   }
   if (result.ok()) {
     // We skip over any leftover data (just padding for now) in "input"

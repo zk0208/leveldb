@@ -361,6 +361,7 @@ Status TableBuilder::Finish() {
   // Write footer
   if (ok()) {
     Footer footer;
+    footer.set_files(r->file_numbers);
     footer.set_metaindex_handle(metaindex_block_handle);
     footer.set_index_handle(index_block_handle);
     std::string footer_encoding;

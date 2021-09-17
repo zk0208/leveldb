@@ -4,11 +4,14 @@
 
 #include "leveldb/table.h"
 
+#include "db/filename.h"
+
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
+
 #include "table/block.h"
 #include "table/filter_block.h"
 #include "table/format.h"
@@ -19,6 +22,9 @@ namespace leveldb {
 
 struct Table::Rep {
   ~Rep() {
+    for (auto f : files) {
+      delete f;
+    }
     delete filter;
     delete[] filter_data;
     delete index_block;
@@ -27,6 +33,7 @@ struct Table::Rep {
   Options options;
   Status status;
   RandomAccessFile* file;
+  std::vector<RandomAccessFile*> files;
   uint64_t cache_id;
   FilterBlockReader* filter;
   const char* filter_data;
@@ -52,6 +59,22 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   s = footer.DecodeFrom(&footer_input);
   if (!s.ok()) return s;
 
+  // open datafile
+  std::vector<RandomAccessFile*> files;
+  for (int i = 0; i < footer.files().size(); i++) {
+    if (footer.files()[i] == 0) {
+      break;
+    }
+    std::string fname =
+        TableFileDataName(options.db_paths[i].path, footer.files()[i]);
+    RandomAccessFile* file = nullptr;
+    s = options.env->NewRandomAccessFile(fname, &file);
+    if (!s.ok()) {
+      // 文件打开失败，需要一些提示
+    }
+    files.push_back(file);
+  }
+
   // Read the index block
   BlockContents index_block_contents;
   ReadOptions opt;
@@ -67,6 +90,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     Rep* rep = new Table::Rep;
     rep->options = options;
     rep->file = file;
+    rep->files = files;
     rep->metaindex_handle = footer.metaindex_handle();
     rep->index_block = index_block;
     rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
