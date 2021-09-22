@@ -97,7 +97,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     rep->filter_data = nullptr;
     rep->filter = nullptr;
     *table = new Table(rep);
-    (*table)->ReadMeta(footer);
+    (*table)->ReadMeta(footer);  // 处理bloom filter;todo
   }
 
   return s;
@@ -192,13 +192,17 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     if (block_cache != nullptr) {
       char cache_key_buffer[16];
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
-      EncodeFixed64(cache_key_buffer + 8, handle.offset());
+      EncodeFixed64(cache_key_buffer + 8,
+                    handle.offset() * table->rep_->files.size() +
+                        handle.fileNumber());  // 重新计算id
       Slice key(cache_key_buffer, sizeof(cache_key_buffer));
       cache_handle = block_cache->Lookup(key);
       if (cache_handle != nullptr) {
         block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
       } else {
-        s = ReadBlock(table->rep_->file, options, handle, &contents);
+        // s = ReadBlock(table->rep_->file, options, handle, &contents);
+        s = ReadBlock(table->rep_->files[handle.fileNumber()], options, handle,
+                      &contents);
         if (s.ok()) {
           block = new Block(contents);
           if (contents.cachable && options.fill_cache) {
@@ -208,7 +212,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
         }
       }
     } else {
-      s = ReadBlock(table->rep_->file, options, handle, &contents);
+      // s = ReadBlock(table->rep_->file, options, handle, &contents);
+      s = ReadBlock(table->rep_->files[handle.fileNumber()], options, handle,
+                    &contents);
       if (s.ok()) {
         block = new Block(contents);
       }

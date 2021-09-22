@@ -16,6 +16,7 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
+#include "leveldb/status.h"
 
 #include "table/block_builder.h"
 #include "table/filter_block.h"
@@ -74,7 +75,8 @@ struct TableBuilder::Rep {
   // uint64_t offset;
   uint64_t meta_offset;
   std::vector<uint64_t> offsets;
-  std::atomic<Status> status;
+  // std::atomic<Status> status;
+  Status status;
   BlockBuilder* data_block;
   std::deque<DataBlockWithHandle> data_block_queue;  // todo 避免拷贝，提高性能
   BlockBuilder index_block;
@@ -203,9 +205,11 @@ void TableBuilder::Flush() {
   if (r->data_block->empty()) return;
   assert(!r->pending_index_entry);
   if (r->options.multi_path) {
-    BlockHandle* index_handle = new BlockHandle;
-    r->data_block_queue.emplace_back(r->data_block,
-                                     index_handle);  // datablock放到队列中去
+    BlockHandle* index_handle = new BlockHandle();
+    DataBlockWithHandle tmpDBH;
+    tmpDBH.data_block = r->data_block;
+    tmpDBH.pending_handle = index_handle;
+    r->data_block_queue.emplace_back(tmpDBH);  // datablock放到队列中去
     r->data_block = nullptr;
     r->pending_handle_queue.emplace_back(
         index_handle);  // index handle放到队列中去

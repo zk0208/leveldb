@@ -242,6 +242,7 @@ void DBImpl::RemoveObsoleteFiles() {
   uint64_t number;
   FileType type;
   std::vector<std::string> files_to_delete;
+  std::vector<std::string> sst_files_to_delete;
   for (std::string& filename : filenames) {
     if (ParseFileName(filename, &number, &type)) {
       bool keep = true;
@@ -257,6 +258,9 @@ void DBImpl::RemoveObsoleteFiles() {
           break;
         case kTableFile:
           keep = (live.find(number) != live.end());
+          if (!keep) {
+            sst_files_to_delete.push_back(filename);
+          }
           break;
         case kTempFile:
           // Any temp files that are currently being written to must
@@ -285,6 +289,9 @@ void DBImpl::RemoveObsoleteFiles() {
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
   mutex_.Unlock();
+  for (const std::string& sst : sst_files_to_delete) {
+    // todo 删除多余的文件
+  }
   for (const std::string& filename : files_to_delete) {
     env_->RemoveFile(dbname_ + "/" + filename);
   }
