@@ -5,6 +5,7 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_TABLE_H_
 #define STORAGE_LEVELDB_INCLUDE_TABLE_H_
 
+#include "db/version_set.h"
 #include <cstdint>
 
 #include "leveldb/export.h"
@@ -38,7 +39,8 @@ class LEVELDB_EXPORT Table {
   //
   // *file must remain live while this Table is in use.
   static Status Open(const Options& options, RandomAccessFile* file,
-                     uint64_t file_size, Table** table);
+                     uint64_t file_size, Table** table,
+                     const std::vector<RandomAccessFile*>& files);
 
   Table(const Table&) = delete;
   Table& operator=(const Table&) = delete;

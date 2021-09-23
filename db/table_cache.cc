@@ -16,12 +16,18 @@ namespace leveldb {
 struct TableAndFile {
   RandomAccessFile* file;
   Table* table;
+  std::vector<RandomAccessFile*> datafiles;
 };
 
 static void DeleteEntry(const Slice& key, void* value) {
   TableAndFile* tf = reinterpret_cast<TableAndFile*>(value);
   delete tf->table;
   delete tf->file;
+  while (!(tf->datafiles.empty())) {
+    auto tmp = tf->datafiles.back();
+    delete tmp;
+    tf->datafiles.pop_back();
+  }
   delete tf;
 }
 
@@ -49,9 +55,21 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
   *handle = cache_->Lookup(key);
   if (*handle == nullptr) {
     std::string fname = TableFileName(dbname_, file_number);
+    assert(versions_->data_files.count(file_number) > 0);
+    const std::vector<uint64_t>& fnums = versions_->data_files.at(file_number);
+    std::vector<std::string> fnames;
+    for (int i = 0; i < fnums.size(); i++) {
+      fnames.push_back(TableFileDataName(options_.db_paths[i].path, fnums[i]));
+    }
     RandomAccessFile* file = nullptr;
+    std::vector<RandomAccessFile*> files;
     Table* table = nullptr;
     s = env_->NewRandomAccessFile(fname, &file);
+    for (int i = 0; i < fnames.size(); i++) {
+      RandomAccessFile* tmpfile;
+      env_->NewRandomAccessFile(fnames[i], &tmpfile);
+      files.push_back(tmpfile);
+    }
     if (!s.ok()) {
       std::string old_fname = SSTTableFileName(dbname_, file_number);
       if (env_->NewRandomAccessFile(old_fname, &file).ok()) {
@@ -59,7 +77,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       }
     }
     if (s.ok()) {
-      s = Table::Open(options_, file, file_size, &table);
+      s = Table::Open(options_, file, file_size, &table, files);
     }
 
     if (!s.ok()) {
@@ -67,10 +85,18 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       delete file;
       // We do not cache error results so that if the error is transient,
       // or somebody repairs the file, we recover automatically.
+      while (!files.empty()) {
+        auto f = files.back();
+        delete f;
+        files.pop_back();
+      }
     } else {
       TableAndFile* tf = new TableAndFile;
       tf->file = file;
       tf->table = table;
+      for (int i = 0; i < files.size(); i++) {
+        tf->datafiles.push_back(files[i]);
+      }
       *handle = cache_->Insert(key, tf, 1, &DeleteEntry);
     }
   }

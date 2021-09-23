@@ -7,12 +7,14 @@
 #ifndef STORAGE_LEVELDB_DB_TABLE_CACHE_H_
 #define STORAGE_LEVELDB_DB_TABLE_CACHE_H_
 
+#include "db/dbformat.h"
+#include "db/version_set.h"
 #include <cstdint>
 #include <string>
 
-#include "db/dbformat.h"
 #include "leveldb/cache.h"
 #include "leveldb/table.h"
+
 #include "port/port.h"
 
 namespace leveldb {
@@ -43,10 +45,13 @@ class TableCache {
   // Evict any entry for the specified file number
   void Evict(uint64_t file_number);
 
+  void SetVersionSet(VersionSet* versionset) { versions_ = versionset; }
+
  private:
   Status FindTable(uint64_t file_number, uint64_t file_size, Cache::Handle**);
 
   Env* const env_;
+  VersionSet* versions_;
   const std::string dbname_;
   const Options& options_;
   Cache* cache_;

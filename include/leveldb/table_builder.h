@@ -34,8 +34,11 @@ class LEVELDB_EXPORT TableBuilder {
   TableBuilder(const Options& options, WritableFile* file);
 
   TableBuilder(const Options& options, WritableFile* file,
-               std::vector<WritableFile*> files,
-               std::vector<uint64_t> file_nums);
+               std::vector<WritableFile*> files);
+
+  // TableBuilder(const Options& options, WritableFile* file,
+  //              std::vector<WritableFile*> files,
+  //              std::vector<uint64_t> file_nums);
 
   TableBuilder(const TableBuilder&) = delete;
   TableBuilder& operator=(const TableBuilder&) = delete;

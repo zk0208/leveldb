@@ -149,7 +149,9 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       background_compaction_scheduled_(false),
       manual_compaction_(nullptr),
       versions_(new VersionSet(dbname_, &options_, table_cache_,
-                               &internal_comparator_)) {}
+                               &internal_comparator_)) {
+  table_cache_->SetVersionSet(versions_);
+}
 
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
@@ -552,8 +554,12 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     if (base != nullptr) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
+    std::vector<uint64_t> file_numbers;
+    for (int i = 1; i < files.size(); i++) {
+      file_numbers.push_back(files[i]->number);
+    }
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest);
+                  meta.largest, file_numbers);
   }
 
   CompactionStats stats;

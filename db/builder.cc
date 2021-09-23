@@ -116,11 +116,11 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     if (!options.multi_path) {
       builder = new TableBuilder(options, file);
     } else {
-      std::vector<uint64_t> file_numbers;
-      for (int i = 1; i < files.size(); i++) {
-        file_numbers.push_back(files[i]->number);
-      }
-      builder = new TableBuilder(options, file, writable_files, file_numbers);
+      // std::vector<uint64_t> file_numbers;
+      // for (int i = 1; i < files.size(); i++) {
+      //   file_numbers.push_back(files[i]->number);
+      // }
+      builder = new TableBuilder(options, file, writable_files);
     }
     files[0]->smallest.DecodeFrom(iter->key());
     Slice key;

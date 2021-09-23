@@ -15,12 +15,12 @@
 #ifndef STORAGE_LEVELDB_DB_VERSION_SET_H_
 #define STORAGE_LEVELDB_DB_VERSION_SET_H_
 
+#include "db/dbformat.h"
+#include "db/version_edit.h"
 #include <map>
 #include <set>
 #include <vector>
 
-#include "db/dbformat.h"
-#include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
 
@@ -274,6 +274,8 @@ class VersionSet {
 
   friend class Compaction;
   friend class Version;
+  friend class Table;
+  friend class TableCache;
 
   bool ReuseManifest(const std::string& dscname, const std::string& dscbase);
 
@@ -313,6 +315,8 @@ class VersionSet {
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
   std::string compact_pointer_[config::kNumLevels];
+
+  std::unordered_map<uint64_t, std::vector<uint64_t>> data_files;
 };
 
 // A Compaction encapsulates information about a compaction.

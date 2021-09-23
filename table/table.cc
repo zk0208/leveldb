@@ -43,7 +43,8 @@ struct Table::Rep {
 };
 
 Status Table::Open(const Options& options, RandomAccessFile* file,
-                   uint64_t size, Table** table) {
+                   uint64_t size, Table** table,
+                   const std::vector<RandomAccessFile*>& files) {
   *table = nullptr;
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
@@ -60,20 +61,21 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   if (!s.ok()) return s;
 
   // open datafile
-  std::vector<RandomAccessFile*> files;
-  for (int i = 0; i < footer.files().size(); i++) {
-    if (footer.files()[i] == 0) {
-      break;
-    }
-    std::string fname =
-        TableFileDataName(options.db_paths[i].path, footer.files()[i]);
-    RandomAccessFile* file = nullptr;
-    s = options.env->NewRandomAccessFile(fname, &file);
-    if (!s.ok()) {
-      // 文件打开失败，需要一些提示
-    }
-    files.push_back(file);
-  }
+  // std::vector<RandomAccessFile*> files;
+  // assert(versions->data_files.count()>0);
+  // for (int i = 0; i < footer.files().size(); i++) {
+  //   if (footer.files()[i] == 0) {
+  //     break;
+  //   }
+  //   std::string fname =
+  //       TableFileDataName(options.db_paths[i].path, footer.files()[i]);
+  //   RandomAccessFile* file = nullptr;
+  //   s = options.env->NewRandomAccessFile(fname, &file);
+  //   if (!s.ok()) {
+  //     // 文件打开失败，需要一些提示
+  //   }
+  //   files.push_back(file);
+  // }
 
   // Read the index block
   BlockContents index_block_contents;

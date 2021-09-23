@@ -48,8 +48,7 @@ struct TableBuilder::Rep {
     index_block_options.block_restart_interval = 1;
   }
 
-  Rep(const Options& opt, WritableFile* f, std::vector<WritableFile*> fs,
-      std::vector<uint64_t> file_nums)
+  Rep(const Options& opt, WritableFile* f, std::vector<WritableFile*> fs)
       : options(opt),
         index_block_options(opt),
         file(f),
@@ -62,8 +61,7 @@ struct TableBuilder::Rep {
                          ? nullptr
                          : new FilterBlockBuilder(opt.filter_policy)),
         pending_index_entry(false),
-        files(fs),
-        file_numbers(file_nums) {
+        files(fs) {
     index_block_options.block_restart_interval = 1;
   }
 
@@ -71,7 +69,7 @@ struct TableBuilder::Rep {
   Options index_block_options;
   WritableFile* file;
   std::vector<WritableFile*> files;
-  std::vector<uint64_t> file_numbers;
+  // std::vector<uint64_t> file_numbers;
   // uint64_t offset;
   uint64_t meta_offset;
   std::vector<uint64_t> offsets;
@@ -115,9 +113,8 @@ TableBuilder::TableBuilder(const Options& options, WritableFile* file)
 }
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file,
-                           std::vector<WritableFile*> files,
-                           std::vector<uint64_t> file_nums)
-    : rep_(new Rep(options, file, files, file_nums)) {
+                           std::vector<WritableFile*> files)
+    : rep_(new Rep(options, file, files)) {
   if (rep_->filter_block != nullptr) {
     rep_->filter_block->StartBlock(0);
   }
@@ -365,7 +362,7 @@ Status TableBuilder::Finish() {
   // Write footer
   if (ok()) {
     Footer footer;
-    footer.set_files(r->file_numbers);
+    // footer.set_files(r->file_numbers);
     footer.set_metaindex_handle(metaindex_block_handle);
     footer.set_index_handle(index_block_handle);
     std::string footer_encoding;
