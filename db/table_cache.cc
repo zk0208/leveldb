@@ -24,7 +24,7 @@ static void DeleteEntry(const Slice& key, void* value) {
   delete tf->table;
   delete tf->file;
   for (int i = 0; i < tf->datafiles.size(); i++) {
-    delete tf->datafiles[i];
+    delete (tf->datafiles)[i];
   }
   delete tf;
 }

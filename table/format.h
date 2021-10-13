@@ -6,7 +6,7 @@
 #define STORAGE_LEVELDB_TABLE_FORMAT_H_
 
 #include <atomic>
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 #include <cstdint>
 #include <string>
 

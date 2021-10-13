@@ -13,7 +13,7 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 #define STORAGE_LEVELDB_INCLUDE_TABLE_BUILDER_H_
 
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 #include <cstdint>
 
 #include "leveldb/export.h"

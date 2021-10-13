@@ -17,7 +17,7 @@
 
 #include "db/dbformat.h"
 #include "db/version_edit.h"
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 #include <map>
 #include <set>
 #include <vector>

@@ -8,7 +8,7 @@
 #include "db/filename.h"
 #include "db/table_cache.h"
 #include "db/version_edit.h"
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 
 #include "leveldb/db.h"
 #include "leveldb/env.h"

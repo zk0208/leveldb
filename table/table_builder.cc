@@ -5,7 +5,7 @@
 #include "leveldb/table_builder.h"
 
 #include <atomic>
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 #include <cassert>
 #include <condition_variable>
 #include <deque>

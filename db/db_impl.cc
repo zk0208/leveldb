@@ -17,7 +17,7 @@
 #include "db/write_batch_internal.h"
 #include <algorithm>
 #include <atomic>
-#include <bits/stdint-uintn.h>
+// #include <bits/stdint-uintn.h>
 #include <cstdint>
 #include <cstdio>
 #include <set>
