@@ -842,7 +842,8 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   }
 
   // Install new files
-  data_files.insert(edit->new_data_files.begin(), edit->new_data_files.end());
+  // data_files.insert(edit->new_data_files_.begin(),
+  // edit->new_data_files_.end()); //废弃
 
   // Install the new version
   if (s.ok()) {
@@ -926,6 +927,7 @@ Status VersionSet::Recover(bool* save_manifest) {
 
       if (s.ok()) {
         builder.Apply(&edit);
+        // updateDataMap(&edit);  // update map信息
       }
 
       if (edit.has_log_number_) {
@@ -1092,8 +1094,9 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
     const std::vector<FileMetaData*>& files = current_->files_[level];
     for (size_t i = 0; i < files.size(); i++) {
       const FileMetaData* f = files[i];
-      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest,
-                   data_files.at(f->number));
+      // edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest,
+      //              data_files.at(f->number)); // 废弃
+      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
     }
   }
 
@@ -1254,6 +1257,19 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   delete[] list;
   return result;
 }
+
+// void VersionSet::deleteDatafileMap(uint64_t fileNum) {
+//   data_files.erase(fileNum);  // todo 是否要考虑并发(会出错吗？)
+// }
+
+// std::vector<uint64_t> VersionSet::getDatafileNum(uint64_t fileNum) { // 废弃
+//   return data_files.at(fileNum);
+// }
+
+// void VersionSet::updateDataMap(const VersionEdit* edit) {
+//   data_files.insert(edit->new_data_files_.begin(),
+//                     edit->new_data_files_.end());  // update map数据
+// }
 
 Compaction* VersionSet::PickCompaction() {
   Compaction* c;

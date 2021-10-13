@@ -23,10 +23,8 @@ static void DeleteEntry(const Slice& key, void* value) {
   TableAndFile* tf = reinterpret_cast<TableAndFile*>(value);
   delete tf->table;
   delete tf->file;
-  while (!(tf->datafiles.empty())) {
-    auto tmp = tf->datafiles.back();
-    delete tmp;
-    tf->datafiles.pop_back();
+  for (int i = 0; i < tf->datafiles.size(); i++) {
+    delete tf->datafiles[i];
   }
   delete tf;
 }
@@ -55,11 +53,17 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
   *handle = cache_->Lookup(key);
   if (*handle == nullptr) {
     std::string fname = TableFileName(dbname_, file_number);
-    assert(versions_->data_files.count(file_number) > 0);
-    const std::vector<uint64_t>& fnums = versions_->data_files.at(file_number);
+    // assert(versions_->data_files.count(file_number) > 0);  //存在对应的映射
+    // const std::vector<uint64_t>& fnums =
+    // versions_->data_files.at(file_number);
     std::vector<std::string> fnames;
-    for (int i = 0; i < fnums.size(); i++) {
-      fnames.push_back(TableFileDataName(options_.db_paths[i].path, fnums[i]));
+    // for (int i = 0; i < fnums.size(); i++) {
+    //   fnames.push_back(TableFileDataName(options_.db_paths[i].path,
+    //   fnums[i]));
+    // }
+    for (int i = 0; i < options_.db_paths.size(); i++) {
+      fnames.push_back(
+          TableFileDataName(options_.db_paths[i].path, file_number));
     }
     RandomAccessFile* file = nullptr;
     std::vector<RandomAccessFile*> files;

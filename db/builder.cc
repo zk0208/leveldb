@@ -23,14 +23,27 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
   iter->SeekToFirst();
 
   std::string fname = TableFileName(dbname, meta->number);
+  std::vector<std::string> fnames;
+  for (int i = 0; i < options.db_paths.size(); i++) {
+    fnames.push_back(TableFileDataName(options.db_paths[i].path, meta->number));
+  }
   if (iter->Valid()) {
     WritableFile* file;
+    std::vector<WritableFile*> datafiles;
     s = env->NewWritableFile(fname, &file);
     if (!s.ok()) {
       return s;
     }
+    WritableFile* tmp_file;
+    for (int i = 0; i < fnames.size(); i++) {
+      s = env->NewWritableFile(fnames[i], &tmp_file);
+      if (!s.ok()) {
+        return s;
+      }
+      datafiles.push_back(tmp_file);
+    }
 
-    TableBuilder* builder = new TableBuilder(options, file);
+    TableBuilder* builder = new TableBuilder(options, file, datafiles);
     meta->smallest.DecodeFrom(iter->key());
     Slice key;
     for (; iter->Valid(); iter->Next()) {
@@ -44,7 +57,8 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     // Finish and check for builder errors
     s = builder->Finish();
     if (s.ok()) {
-      meta->file_size = builder->FileSize();
+      // meta->file_size = builder->FileSize();
+      meta->file_size = builder->MetaFileSize();
       assert(meta->file_size > 0);
     }
     delete builder;
@@ -91,9 +105,9 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
 
   std::string fname = TableFileName(dbname, files[0]->number);
   std::vector<std::string> data_fnames;
-  for (int i = 1; i < options.db_paths.size(); i++) {
+  for (int i = 0; i < options.db_paths.size(); i++) {
     data_fnames.emplace_back(
-        TableFileDataName(options.db_paths[i].path, files[i]->number));
+        TableFileDataName(options.db_paths[i].path, files[i + 1]->number));
   }
   if (iter->Valid()) {
     WritableFile* file;

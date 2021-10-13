@@ -4,26 +4,30 @@
 
 #include "leveldb/db.h"
 
-#include <atomic>
-#include <cinttypes>
-#include <string>
-
-#include "gtest/gtest.h"
-#include "benchmark/benchmark.h"
 #include "db/db_impl.h"
 #include "db/filename.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
+#include <atomic>
+#include <bits/stdint-uintn.h>
+#include <cinttypes>
+#include <string>
+#include <sys/types.h>
+
 #include "leveldb/cache.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/table.h"
+
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/hash.h"
 #include "util/logging.h"
 #include "util/mutexlock.h"
 #include "util/testutil.h"
+
+#include "benchmark/benchmark.h"
+#include "gtest/gtest.h"
 
 namespace leveldb {
 
@@ -2332,7 +2336,8 @@ static void BM_LogAndApply(benchmark::State& state) {
   for (int i = 0; i < num_base_files; i++) {
     InternalKey start(MakeKey(2 * fnum), 1, kTypeValue);
     InternalKey limit(MakeKey(2 * fnum + 1), 1, kTypeDeletion);
-    vbase.AddFile(2, fnum++, 1 /* file size */, start, limit);
+    vbase.AddFile(2, fnum++, 1 /* file size */, start, limit,
+                  std::vector<uint64_t>());  // todo 暂时用不到，需要修复
   }
   ASSERT_LEVELDB_OK(vset.LogAndApply(&vbase, &mu));
 
@@ -2343,7 +2348,8 @@ static void BM_LogAndApply(benchmark::State& state) {
     vedit.RemoveFile(2, fnum);
     InternalKey start(MakeKey(2 * fnum), 1, kTypeValue);
     InternalKey limit(MakeKey(2 * fnum + 1), 1, kTypeDeletion);
-    vedit.AddFile(2, fnum++, 1 /* file size */, start, limit);
+    vedit.AddFile(2, fnum++, 1 /* file size */, start, limit,
+                  std::vector<uint64_t>());  // todo 暂时用不到，需要修复
     vset.LogAndApply(&vedit, &mu);
   }
   uint64_t stop_micros = env->NowMicros();

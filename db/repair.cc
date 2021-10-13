@@ -34,6 +34,7 @@
 #include "db/table_cache.h"
 #include "db/version_edit.h"
 #include "db/write_batch_internal.h"
+
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
@@ -368,6 +369,9 @@ class Repairer {
     for (size_t i = 0; i < tables_.size(); i++) {
       // TODO(opt): separate out into multiple levels
       const TableInfo& t = tables_[i];
+      // edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
+      //               t.meta.largest,
+      //               std::vector<uint64_t>());  // todo 暂时用不到 待修复
       edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
                     t.meta.largest);
     }

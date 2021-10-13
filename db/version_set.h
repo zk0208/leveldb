@@ -17,6 +17,7 @@
 
 #include "db/dbformat.h"
 #include "db/version_edit.h"
+#include <bits/stdint-uintn.h>
 #include <map>
 #include <set>
 #include <vector>
@@ -248,6 +249,12 @@ class VersionSet {
   // The caller should delete the iterator when no longer needed.
   Iterator* MakeInputIterator(Compaction* c);
 
+  // delete datafile map
+  // void deleteDatafileMap(uint64_t fileNum); //废弃
+
+  // get datafiles
+  // std::vector<uint64_t> getDatafileNum(uint64_t fileNum); //废弃
+
   // Returns true iff some level needs a compaction.
   bool NeedsCompaction() const {
     Version* v = current_;
@@ -268,6 +275,8 @@ class VersionSet {
     char buffer[100];
   };
   const char* LevelSummary(LevelSummaryStorage* scratch) const;
+
+  // void updateDataMap(const VersionEdit* edit);
 
  private:
   class Builder;
@@ -316,7 +325,7 @@ class VersionSet {
   // Either an empty string, or a valid InternalKey.
   std::string compact_pointer_[config::kNumLevels];
 
-  std::unordered_map<uint64_t, std::vector<uint64_t>> data_files;
+  // std::unordered_map<uint64_t, std::vector<uint64_t>> data_files; //废弃
 };
 
 // A Compaction encapsulates information about a compaction.

@@ -17,6 +17,7 @@
 #include "db/write_batch_internal.h"
 #include <algorithm>
 #include <atomic>
+#include <bits/stdint-uintn.h>
 #include <cstdint>
 #include <cstdio>
 #include <set>
@@ -59,6 +60,7 @@ struct DBImpl::CompactionState {
     uint64_t number;
     uint64_t file_size;
     InternalKey smallest, largest;
+    std::vector<uint64_t> dataFiles;
   };
 
   Output* current_output() { return &outputs[outputs.size() - 1]; }
@@ -82,6 +84,7 @@ struct DBImpl::CompactionState {
 
   // State kept for output being generated
   WritableFile* outfile;
+  std::vector<WritableFile*> data_outfiles;
   TableBuilder* builder;
 
   uint64_t total_bytes;
@@ -244,7 +247,7 @@ void DBImpl::RemoveObsoleteFiles() {
   uint64_t number;
   FileType type;
   std::vector<std::string> files_to_delete;
-  std::vector<std::string> sst_files_to_delete;
+  std::vector<uint64_t> sst_files_to_delete;
   for (std::string& filename : filenames) {
     if (ParseFileName(filename, &number, &type)) {
       bool keep = true;
@@ -261,7 +264,7 @@ void DBImpl::RemoveObsoleteFiles() {
         case kTableFile:
           keep = (live.find(number) != live.end());
           if (!keep) {
-            sst_files_to_delete.push_back(filename);
+            sst_files_to_delete.push_back(number);
           }
           break;
         case kTempFile:
@@ -280,6 +283,8 @@ void DBImpl::RemoveObsoleteFiles() {
         files_to_delete.push_back(std::move(filename));
         if (type == kTableFile) {
           table_cache_->Evict(number);
+          // 删除map映射
+          // versions_->deleteDatafileMap(number); 废弃
         }
         Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
             static_cast<unsigned long long>(number));
@@ -291,9 +296,15 @@ void DBImpl::RemoveObsoleteFiles() {
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
   mutex_.Unlock();
-  for (const std::string& sst : sst_files_to_delete) {
-    // todo 删除多余的文件
-  }
+  // for (const uint64_t sst : sst_files_to_delete) { // 废弃
+  //   // todo 删除多余的文件
+  //   std::vector<uint64_t> dataNums = versions_->getDatafileNum(sst);
+  //   for (int i = 0; i < dataNums.size(); i++) {
+  //     env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,
+  //                                        dataNums[i]));  //删除对应的
+  //                                        data文件
+  //   }
+  // }
   for (const std::string& filename : files_to_delete) {
     env_->RemoveFile(dbname_ + "/" + filename);
   }
@@ -520,13 +531,14 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   FileMetaData meta;
   meta.number = versions_->NewFileNumber();
   pending_outputs_.insert(meta.number);
-  std::vector<FileMetaData*> files;
-  files.emplace_back(&meta);
-  for (int i = 0; i < options_.db_paths.size(); i++) {
-    FileMetaData tmp;
-    tmp.number = versions_->NewFileNumber();
-    files.emplace_back(&tmp);
-  }
+  // std::vector<FileMetaData*> files;
+  // files.emplace_back(&meta);
+  // for (int i = 0; i < options_.db_paths.size(); i++) {
+  //   FileMetaData tmp;
+  //   // tmp.number = versions_->NewFileNumber();
+  //   tmp.number = meta.number;
+  //   files.emplace_back(&tmp);
+  // }
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
@@ -534,8 +546,9 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
-    // s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
-    s = BuildTableFromMem(dbname_, env_, options_, table_cache_, iter, files);
+    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    // s = BuildTableFromMem(dbname_, env_, options_, table_cache_, iter,
+    // files);
     mutex_.Lock();
   }
 
@@ -554,12 +567,14 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     if (base != nullptr) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
-    std::vector<uint64_t> file_numbers;
-    for (int i = 1; i < files.size(); i++) {
-      file_numbers.push_back(files[i]->number);
-    }
+    // std::vector<uint64_t> file_numbers;
+    // for (int i = 1; i < files.size(); i++) {
+    //   file_numbers.push_back(files[i]->number);
+    // }
+    // edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
+    //               meta.largest, file_numbers); //废弃
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest, file_numbers);
+                  meta.largest);
   }
 
   CompactionStats stats;
@@ -757,8 +772,11 @@ void DBImpl::BackgroundCompaction() {
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->RemoveFile(c->level(), f->number);
+    // c->edit()->AddFile(
+    //     c->level() + 1, f->number, f->file_size, f->smallest, f->largest,
+    //     std::vector<uint64_t>());  // 只是向下移动，不需要更新映射 //废弃
     c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
-                       f->largest);
+                       f->largest);  // 只是向下移动，不需要更新映射
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
@@ -824,14 +842,20 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
   uint64_t file_number;
+  // std::vector<uint64_t> data_file_numbers;
   {
     mutex_.Lock();
     file_number = versions_->NewFileNumber();
+    // for (int i = 0; i < options_.db_paths.size(); i++) {
+    //   // data_file_numbers.push_back(versions_->NewFileNumber());
+    //   data_file_numbers.push_back(file_number);
+    // }
     pending_outputs_.insert(file_number);
     CompactionState::Output out;
     out.number = file_number;
     out.smallest.Clear();
     out.largest.Clear();
+    // out.dataFiles = data_file_numbers; // 废弃
     compact->outputs.push_back(out);
     mutex_.Unlock();
   }
@@ -839,9 +863,26 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   // Make the output file
   std::string fname = TableFileName(dbname_, file_number);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
-  if (s.ok()) {
-    compact->builder = new TableBuilder(options_, compact->outfile);
+  std::vector<std::string> fnames;
+  for (int i = 0; i < options_.db_paths.size(); i++) {
+    fnames.push_back(TableFileDataName(options_.db_paths[i].path, file_number));
   }
+  if (s.ok()) {
+    // std::vector<WritableFile*> data_writableFiles;
+    WritableFile* tmp;
+    for (int i = 0; i < fnames.size(); i++) {
+      s = env_->NewWritableFile(fnames[i], &tmp);
+      if (!s.ok()) {
+        return s;
+      }
+      compact->data_outfiles.push_back(tmp);
+    }
+    compact->builder =
+        new TableBuilder(options_, compact->outfile, compact->data_outfiles);
+  }
+  // if (s.ok()) {
+  //   compact->builder = new TableBuilder(options_, compact->outfile);
+  // }
   return s;
 }
 
@@ -862,7 +903,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   } else {
     compact->builder->Abandon();
   }
-  const uint64_t current_bytes = compact->builder->FileSize();
+  // const uint64_t current_bytes = compact->builder->FileSize();
+  const uint64_t current_bytes = compact->builder->MetaFileSize();
   compact->current_output()->file_size = current_bytes;
   compact->total_bytes += current_bytes;
   delete compact->builder;
@@ -871,12 +913,22 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   // Finish and check for file errors
   if (s.ok()) {
     s = compact->outfile->Sync();
+    for (auto& d : compact->data_outfiles) {
+      d->Sync();
+    }
   }
   if (s.ok()) {
     s = compact->outfile->Close();
+    for (auto& d : compact->data_outfiles) {
+      d->Close();
+    }
   }
   delete compact->outfile;
+  for (auto& d : compact->data_outfiles) {
+    delete d;
+  }
   compact->outfile = nullptr;
+  compact->data_outfiles.clear();
 
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
@@ -906,6 +958,10 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   const int level = compact->compaction->level();
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
+    // compact->compaction->edit()->AddFile(level + 1, out.number,
+    // out.file_size,
+    //                                      out.smallest, out.largest,
+    //                                      out.dataFiles);
     compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
                                          out.smallest, out.largest);
   }

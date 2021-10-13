@@ -4,6 +4,9 @@
 
 #include "table/format.h"
 
+#include <cstdlib>
+#include <iostream>
+
 #include "leveldb/env.h"
 
 #include "port/port.h"
@@ -15,7 +18,11 @@ namespace leveldb {
 
 void BlockHandle::EncodeTo(std::string* dst) const {
   // Sanity check that all fields have been set
-  assert(offset_ != ~static_cast<uint64_t>(0));
+  // assert(offset_ != ~static_cast<uint64_t>(0));
+  if (offset_ == ~static_cast<uint64_t>(0)) {
+    3 / 0;
+    std::cout << "offset_出错" << std::endl;
+  }
   assert(size_ != ~static_cast<uint64_t>(0));
   PutVarint64(dst, fNumber_);
   PutVarint64(dst, offset_);

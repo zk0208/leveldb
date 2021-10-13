@@ -61,14 +61,18 @@ class VersionEdit {
   // REQUIRES: This version has not been saved (see VersionSet::SaveTo)
   // REQUIRES: "smallest" and "largest" are smallest and largest keys in file
   void AddFile(int level, uint64_t file, uint64_t file_size,
-               const InternalKey& smallest, const InternalKey& largest,
-               const std::vector<uint64_t>& data_files) {
+               const InternalKey& smallest, const InternalKey& largest) {
+    // void AddFile(int level, uint64_t file, uint64_t file_size,
+    //              const InternalKey& smallest, const InternalKey& largest,
+    //              const std::vector<uint64_t>& data_files) {
     FileMetaData f;
     f.number = file;
     f.file_size = file_size;
     f.smallest = smallest;
     f.largest = largest;
-    new_data_files.insert(std::make_pair(file, data_files));
+    // if (!data_files.empty()) {
+    //   new_data_files_.insert(std::make_pair(file, data_files));
+    // }
     new_files_.push_back(std::make_pair(level, f));
   }
 
@@ -101,7 +105,7 @@ class VersionEdit {
   std::vector<std::pair<int, InternalKey>> compact_pointers_;
   DeletedFileSet deleted_files_;
   std::vector<std::pair<int, FileMetaData>> new_files_;
-  std::unordered_map<uint64_t, std::vector<uint64_t>> new_data_files;
+  // std::unordered_map<uint64_t, std::vector<uint64_t>> new_data_files_;
 };
 
 }  // namespace leveldb

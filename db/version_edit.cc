@@ -82,10 +82,10 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     PutLengthPrefixedSlice(dst, f.smallest.Encode());
     PutLengthPrefixedSlice(dst, f.largest.Encode());
     // 保存对应data映射
-    PutVarint32(dst, new_data_files.at(f.number).size());
-    for (auto& d : new_data_files.at(f.number)) {
-      PutVarint64(dst, d);
-    }
+    // PutVarint32(dst, new_data_files_.at(f.number).size()); //废弃
+    // for (auto& d : new_data_files_.at(f.number)) {
+    //   PutVarint64(dst, d);
+    // }
   }
 }
 
@@ -186,15 +186,15 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
             GetInternalKey(&input, &f.smallest) &&
             GetInternalKey(&input, &f.largest)) {
           new_files_.push_back(std::make_pair(level, f));
-          uint32_t num = 0;
-          GetVarint32(&input, &num);
-          uint64_t tmpNum = 0;
-          std::vector<uint64_t> tmpNums;
-          for (int i = 0; i < num; i++) {
-            GetVarint64(&input, &tmpNum);
-            tmpNums.push_back(tmpNum);
-          }
-          new_data_files.insert(std::make_pair(f.number, tmpNums));
+          // uint32_t num = 0;
+          // GetVarint32(&input, &num);
+          // uint64_t tmpNum = 0;
+          // std::vector<uint64_t> tmpNums;
+          // for (int i = 0; i < num; i++) {
+          //   GetVarint64(&input, &tmpNum);
+          //   tmpNums.push_back(tmpNum);
+          // }
+          // new_data_files_.insert(std::make_pair(f.number, tmpNums));
         } else {
           msg = "new-file entry";
         }
