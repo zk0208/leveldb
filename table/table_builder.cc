@@ -84,6 +84,8 @@ struct TableBuilder::Rep {
   std::atomic<bool> closed;  // Either Finish() or Abandon() has been called.
   FilterBlockBuilder* filter_block;
   std::mutex m;
+  std::mutex m_handle;
+  std::condition_variable cv_handle;
   // std::mutex m_empty;
   // std::mutex m_member;
   std::condition_variable cv_empty;
@@ -286,10 +288,11 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
     handle->set_offset(r->meta_offset);
   } else {
     handle->set_offset(r->offsets[index]);
+    handle->set_file_number(index);
   }
 
   handle->set_size(block_contents.size());  // todo 改一下
-  handle->finish();
+  // handle->finish();
   if (index != -1) {
     r->status = r->files[index]->Append(block_contents);
   } else {
@@ -315,6 +318,7 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
         r->meta_offset += block_contents.size() + kBlockTrailerSize;
       }
     }
+    handle->finish();  //确保写完文件再标记完成
   }
 }
 
@@ -391,6 +395,10 @@ Status TableBuilder::Finish() {
   while (!r->last_key_queue.empty()) {
     std::string handle_encoding;
     auto handle = r->pending_handle_queue.front();
+    if (!handle->isFinished()) {
+      std::unique_lock<std::mutex> lock(r->m_handle);
+      r->cv_handle.wait(lock, [handle] { return handle->isFinished(); });
+    }
     handle->EncodeTo(&handle_encoding);
     delete handle;
     r->pending_handle_queue.pop_front();
@@ -407,6 +415,8 @@ Status TableBuilder::Finish() {
     // r->pending_index_entry = false;
     std::string handle_encoding;
     auto handle = r->pending_handle_queue.front();
+    // std::cout << "index handle's fnum: " << handle->fileNumber() <<
+    // std::endl;
     handle->EncodeTo(&handle_encoding);
     delete handle;
     r->pending_handle_queue.pop_back();
@@ -479,17 +489,21 @@ void TableBuilder::BackgroundThreadEntryPoint(int index) {
     // assert(!r->last_key_queue.empty());
     // TableBuilder::DataBlockWithHandle tmp = r->data_block_queue.front();
     auto dataBlockWithHandle = r->data_block_queue.front();
+    // 打补丁
+    // dataBlockWithHandle.pending_handle->set_offset(r->offsets[index]);
+    // dataBlockWithHandle.pending_handle->set_file_number(index);
     r->data_block_queue.pop_front();
     empty = r->data_block_queue.empty();
     lock.unlock();
     WriteBlock(dataBlockWithHandle.data_block,
                dataBlockWithHandle.pending_handle, index);
-    dataBlockWithHandle.pending_handle->set_file_number(
-        index);  // pending_handle 设置完毕
+    // dataBlockWithHandle.pending_handle->set_file_number(
+    //     index);  // pending_handle 设置完毕
     if (ok()) {
       r->status = r->files[index]->Flush();  //刷新文件
     }
     delete dataBlockWithHandle.data_block;  //避免内存泄漏
+    r->cv_handle.notify_one();              // block_handle设置完成
 
     //第一个线程负责写元数据(考虑最后finish的时候写index吧，不看内存就可以了，实现问题)
     // if (index == 0) {

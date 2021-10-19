@@ -47,7 +47,7 @@ class BlockHandle {
   void finish() { finished = true; }
 
  private:
-  uint64_t fNumber_;
+  uint64_t fNumber_ = -1;
   uint64_t offset_;
   uint64_t size_;
   bool finished = false;

@@ -22,9 +22,9 @@ namespace leveldb {
 
 struct Table::Rep {
   ~Rep() {
-    for (auto f : files) {
-      delete f;
-    }
+    // for (auto f : files) { //外部维护files的生命周期，这里不需要管理
+    //   delete f;
+    // }
     delete filter;
     delete[] filter_data;
     delete index_block;

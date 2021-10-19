@@ -10,6 +10,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <vector>
 
@@ -93,6 +94,7 @@ struct STLLessThan {
 }  // namespace
 
 class StringSink : public WritableFile {
+  friend class TableConstructor;  //方便调试
  public:
   ~StringSink() override = default;
 
@@ -112,6 +114,8 @@ class StringSink : public WritableFile {
 };
 
 class StringSource : public RandomAccessFile {
+  friend class TableConstructor;  //方便调试
+
  public:
   StringSource(const Slice& contents)
       : contents_(contents.data(), contents.size()) {}
@@ -217,7 +221,11 @@ class TableConstructor : public Constructor {
  public:
   TableConstructor(const Comparator* cmp)
       : Constructor(cmp), source_(nullptr), table_(nullptr) {}
-  ~TableConstructor() override { Reset(); }
+  ~TableConstructor() override {
+    // num++;
+    // std::cout << "table constructor 析构函数调用次数: " << num << std::endl;
+    Reset();
+  }
   Status FinishImpl(const Options& options, const KVMap& data) override {
     Reset();
     StringSink sink;
@@ -252,9 +260,21 @@ class TableConstructor : public Constructor {
     //   data_source_.push_back(
     //       new StringSource(((StringSink*)sinks[i])->contents()));
     // }
+    // for (int i = 0; i < 3; i++) {
+    //   // std::cout << "第 " << i << " 个data文件长度： "
+    //   //           << sinks[i].contents_.size() << std::endl;
+    //   std::cout << "第 " << i << " 个data文件内容： " << sinks[i].contents()
+    //             << std::endl;
+    // }
     for (int i = 0; i < 3; i++) {
       data_source_.push_back(new StringSource((sinks[i]).contents()));
     }
+    // for (int i = 0; i < 3; i++) {
+    //   // std::cout << "第 " << i << " 个source文件长度： "
+    //   //           << data_source_[i]->Size() << std::endl;
+    //   std::cout << "第 " << i << " 个source文件内容： "
+    //             << data_source_[i]->contents_ << std::endl;
+    // }
     Options table_options;
     table_options.multi_path = true;
     // std::cout << "准备打开文件" << std::endl;
@@ -281,11 +301,11 @@ class TableConstructor : public Constructor {
   void Reset() {
     delete table_;
     delete source_;
-    // for (int i = 0; i < data_source_.size(); i++) {
-    //   if (data_source_[i] != nullptr) {
-    //     delete data_sqource_[i];
-    //   }
-    // }
+    for (int i = 0; i < data_source_.size(); i++) {
+      if (data_source_[i] != nullptr) {
+        delete data_source_[i];
+      }
+    }
     table_ = nullptr;
     source_ = nullptr;
     data_source_.clear();
@@ -295,6 +315,7 @@ class TableConstructor : public Constructor {
   // std::vector<RandomAccessFile*> data_source_;
   std::vector<StringSource*> data_source_;
   Table* table_;
+  // int num = 0;
 
   TableConstructor();
 };
@@ -378,7 +399,7 @@ class DBConstructor : public Constructor {
   }
   ~DBConstructor() override {
     // std::cout << "DBConstructor 析构" << std::endl;
-    // delete db_;
+    delete db_;
   }
   Status FinishImpl(const Options& options, const KVMap& data) override {
     delete db_;
@@ -434,23 +455,23 @@ struct TestArgs {
 };
 
 static const TestArgs kTestArgList[] = {
-    {TABLE_TEST, false, 16},
-    {TABLE_TEST, false, 1},
-    {TABLE_TEST, false, 1024},
-    {TABLE_TEST, true, 16},
-    {TABLE_TEST, true, 1},
-    {TABLE_TEST, true, 1024},
+    // {TABLE_TEST, false, 16},
+    // {TABLE_TEST, false, 1},
+    // {TABLE_TEST, false, 1024},
+    // {TABLE_TEST, true, 16},
+    // {TABLE_TEST, true, 1},
+    // {TABLE_TEST, true, 1024},
 
-    {BLOCK_TEST, false, 16},
-    {BLOCK_TEST, false, 1},
-    {BLOCK_TEST, false, 1024},
-    {BLOCK_TEST, true, 16},
-    {BLOCK_TEST, true, 1},
-    {BLOCK_TEST, true, 1024},
+    // {BLOCK_TEST, false, 16},
+    // {BLOCK_TEST, false, 1},
+    // {BLOCK_TEST, false, 1024},
+    // {BLOCK_TEST, true, 16},
+    // {BLOCK_TEST, true, 1},
+    // {BLOCK_TEST, true, 1024},
 
-    // Restart interval does not matter for memtables
-    {MEMTABLE_TEST, false, 16},
-    {MEMTABLE_TEST, true, 16},
+    // // Restart interval does not matter for memtables
+    // {MEMTABLE_TEST, false, 16},
+    // {MEMTABLE_TEST, true, 16},
 
     // Do not bother with restart interval variations for DB
     {DB_TEST, false, 16},
@@ -779,6 +800,7 @@ TEST_F(Harness, RandomizedLongDB) {
     char name[100];
     std::snprintf(name, sizeof(name), "leveldb.num-files-at-level%d", level);
     ASSERT_TRUE(db()->GetProperty(name, &value));
+    std::cout << "level " << level << " files: " << value << std::endl;
     files += atoi(value.c_str());
   }
   ASSERT_GT(files, 0);
