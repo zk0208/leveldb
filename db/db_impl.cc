@@ -288,7 +288,7 @@ void DBImpl::RemoveObsoleteFiles() {
         if (type == kTableFile) {
           table_cache_->Evict(number);
           // 删除map映射
-          // versions_->deleteDatafileMap(number); 废弃
+          // versions_->deleteDatafileMap(number); //废弃
         }
         Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
             static_cast<unsigned long long>(number));
@@ -300,15 +300,18 @@ void DBImpl::RemoveObsoleteFiles() {
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
   mutex_.Unlock();
-  // for (const uint64_t sst : sst_files_to_delete) { // 废弃
-  //   // todo 删除多余的文件
-  //   std::vector<uint64_t> dataNums = versions_->getDatafileNum(sst);
-  //   for (int i = 0; i < dataNums.size(); i++) {
-  //     env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,
-  //                                        dataNums[i]));  //删除对应的
-  //                                        data文件
-  //   }
-  // }
+  for (const uint64_t sst : sst_files_to_delete) { // 废弃
+    // todo 删除多余的文件
+    // std::vector<uint64_t> dataNums = versions_->getDatafileNum(sst);
+    // for (int i = 0; i < dataNums.size(); i++) {
+    //   env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,
+    //                                      dataNums[i]));  //删除对应的
+    //                                      data文件
+    // }
+    for(int i=0;i<options_.db_paths.size();i++){
+      env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,sst)); //删除对应data文件
+    }
+  }
   for (const std::string& filename : files_to_delete) {
     env_->RemoveFile(dbname_ + "/" + filename);
   }
