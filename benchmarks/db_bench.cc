@@ -379,6 +379,7 @@ class Benchmark {
   int heap_counter_;
   CountComparator count_comparator_;
   int total_thread_count_;
+  Options options_;
 
   void PrintHeader() {
     const int kKeySize = 16 + FLAGS_key_prefix;
@@ -597,7 +598,8 @@ class Benchmark {
         } else {
           delete db_;
           db_ = nullptr;
-          DestroyDB(FLAGS_db, Options());
+          // DestroyDB(FLAGS_db, Options());
+          DestroyDB(FLAGS_db, options_);
           Open();
         }
       }
@@ -758,26 +760,27 @@ class Benchmark {
 
   void Open() {
     assert(db_ == nullptr);
-    Options options;
-    options.env = g_env;
-    options.create_if_missing = !FLAGS_use_existing_db;
-    options.block_cache = cache_;
-    options.write_buffer_size = FLAGS_write_buffer_size;
-    options.max_file_size = FLAGS_max_file_size;
-    options.block_size = FLAGS_block_size;
+    options_ = Options();
+    // Options options;
+    options_.env = g_env;
+    options_.create_if_missing = !FLAGS_use_existing_db;
+    options_.block_cache = cache_;
+    options_.write_buffer_size = FLAGS_write_buffer_size;
+    options_.max_file_size = FLAGS_max_file_size;
+    options_.block_size = FLAGS_block_size;
     if (FLAGS_comparisons) {
-      options.comparator = &count_comparator_;
+      options_.comparator = &count_comparator_;
     }
-    options.max_open_files = FLAGS_open_files;
-    options.filter_policy = filter_policy_;
-    options.reuse_logs = FLAGS_reuse_logs;
-    options.multi_path = true;
-    options.compression = kNoCompression;
-    options.db_paths = {
+    options_.max_open_files = FLAGS_open_files;
+    options_.filter_policy = filter_policy_;
+    options_.reuse_logs = FLAGS_reuse_logs;
+    options_.multi_path = true;
+    options_.compression = kNoCompression;
+    options_.db_paths = {
         {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024 * 1024},
         {std::string(FLAGS_db) + "/vol2", (uint64_t)3 * 1024 * 1024 * 1024},
         {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
-    Status s = DB::Open(options, FLAGS_db, &db_);
+    Status s = DB::Open(options_, FLAGS_db, &db_);
     if (!s.ok()) {
       std::fprintf(stderr, "open error: %s\n", s.ToString().c_str());
       std::exit(1);

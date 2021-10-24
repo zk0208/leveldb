@@ -18,14 +18,18 @@
 #include <algorithm>
 #include <atomic>
 // #include <bits/stdint-uintn.h>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
+#include <ostream>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "leveldb/db.h"
 #include "leveldb/env.h"
+#include "leveldb/options.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
@@ -318,6 +322,12 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
   env_->CreateDir(dbname_);
+  //创建子文件夹
+  if (options_.multi_path) {
+    for (int i = 0; i < options_.db_paths.size(); i++) {
+      env_->CreateDir(options_.db_paths[i].path);
+    }
+  }
   assert(db_lock_ == nullptr);
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
   if (!s.ok()) {
@@ -1628,6 +1638,24 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
         }
       }
     }
+    // 删除子文件夹文件
+    if (options.multi_path) {
+      for (size_t i = 0; i < options.db_paths.size(); i++) {
+        Status result = env->GetChildren(options.db_paths[i].path, &filenames);
+        if (!result.ok()) {
+          // Ignore error in case directory does not exist
+          return Status::OK();
+        }
+        for (size_t j = 0; j < filenames.size(); j++) {
+          Status del =
+              env->RemoveFile(options.db_paths[i].path + "/" + filenames[j]);
+          if (result.ok() && !del.ok()) {
+            result = del;
+          }
+        }
+      }
+    }
+
     env->UnlockFile(lock);  // Ignore error since state is already gone
     env->RemoveFile(lockname);
     env->RemoveDir(dbname);  // Ignore error in case dir contains other files
