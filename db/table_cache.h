@@ -7,12 +7,13 @@
 #ifndef STORAGE_LEVELDB_DB_TABLE_CACHE_H_
 #define STORAGE_LEVELDB_DB_TABLE_CACHE_H_
 
+#include "db/dbformat.h"
 #include <cstdint>
 #include <string>
 
-#include "db/dbformat.h"
 #include "leveldb/cache.h"
 #include "leveldb/table.h"
+
 #include "port/port.h"
 
 namespace leveldb {
@@ -32,11 +33,12 @@ class TableCache {
   // by the cache and should not be deleted, and is valid for as long as the
   // returned iterator is live.
   Iterator* NewIterator(const ReadOptions& options, uint64_t file_number,
-                        uint64_t file_size, Table** tableptr = nullptr);
+                        uint32_t path_id, uint64_t file_size,
+                        Table** tableptr = nullptr);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call (*handle_result)(arg, found_key, found_value).
-  Status Get(const ReadOptions& options, uint64_t file_number,
+  Status Get(const ReadOptions& options, uint64_t file_number, uint32_t path_id,
              uint64_t file_size, const Slice& k, void* arg,
              void (*handle_result)(void*, const Slice&, const Slice&));
 
@@ -44,7 +46,8 @@ class TableCache {
   void Evict(uint64_t file_number);
 
  private:
-  Status FindTable(uint64_t file_number, uint64_t file_size, Cache::Handle**);
+  Status FindTable(uint64_t file_number, uint32_t path_id, uint64_t file_size,
+                   Cache::Handle**);
 
   Env* const env_;
   const std::string dbname_;

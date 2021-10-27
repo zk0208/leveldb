@@ -2,11 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include <sys/types.h>
-
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <sys/types.h>
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
@@ -14,6 +13,7 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/write_batch.h"
+
 #include "port/port.h"
 #include "util/crc32c.h"
 #include "util/histogram.h"
@@ -765,6 +765,14 @@ class Benchmark {
     options.write_buffer_size = FLAGS_write_buffer_size;
     options.max_file_size = FLAGS_max_file_size;
     options.block_size = FLAGS_block_size;
+    // 自己的配置
+    options.compression = kNoCompression;
+    options.max_open_files = 65535;
+    options.multi_path = true;
+    options.db_paths = {
+        {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol2", (uint64_t)10 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
     if (FLAGS_comparisons) {
       options.comparator = &count_comparator_;
     }

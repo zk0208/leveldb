@@ -5,6 +5,7 @@
 #include "db/version_edit.h"
 
 #include "db/version_set.h"
+
 #include "util/coding.h"
 
 namespace leveldb {
@@ -76,6 +77,7 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     const FileMetaData& f = new_files_[i].second;
     PutVarint32(dst, kNewFile);
     PutVarint32(dst, new_files_[i].first);  // level
+    PutVarint32(dst, f.path_id);
     PutVarint64(dst, f.number);
     PutVarint64(dst, f.file_size);
     PutLengthPrefixedSlice(dst, f.smallest.Encode());
@@ -175,7 +177,8 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
         break;
 
       case kNewFile:
-        if (GetLevel(&input, &level) && GetVarint64(&input, &f.number) &&
+        if (GetLevel(&input, &level) && GetVarint32(&input, &f.path_id) &&
+            GetVarint64(&input, &f.number) &&
             GetVarint64(&input, &f.file_size) &&
             GetInternalKey(&input, &f.smallest) &&
             GetInternalKey(&input, &f.largest)) {

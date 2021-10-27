@@ -4,16 +4,17 @@
 
 #include "db/version_set.h"
 
-#include <algorithm>
-#include <cstdio>
-
 #include "db/filename.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include <algorithm>
+#include <cstdio>
+
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
+
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
@@ -193,7 +194,8 @@ class Version::LevelFileNumIterator : public Iterator {
   Slice value() const override {
     assert(Valid());
     EncodeFixed64(value_buf_, (*flist_)[index_]->number);
-    EncodeFixed64(value_buf_ + 8, (*flist_)[index_]->file_size);
+    EncodeFixed32(value_buf_ + 8, (*flist_)[index_]->path_id);
+    EncodeFixed64(value_buf_ + 12, (*flist_)[index_]->file_size);
     return Slice(value_buf_, sizeof(value_buf_));
   }
   Status status() const override { return Status::OK(); }
@@ -204,18 +206,19 @@ class Version::LevelFileNumIterator : public Iterator {
   uint32_t index_;
 
   // Backing store for value().  Holds the file number and size.
-  mutable char value_buf_[16];
+  mutable char value_buf_[20];
 };
 
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
                                  const Slice& file_value) {
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
-  if (file_value.size() != 16) {
+  if (file_value.size() != 20) {
     return NewErrorIterator(
         Status::Corruption("FileReader invoked with unexpected value"));
   } else {
     return cache->NewIterator(options, DecodeFixed64(file_value.data()),
-                              DecodeFixed64(file_value.data() + 8));
+                              DecodeFixed32(file_value.data() + 8),
+                              DecodeFixed64(file_value.data() + 12));
   }
 }
 
@@ -231,7 +234,8 @@ void Version::AddIterators(const ReadOptions& options,
   // Merge all level zero files together since they may overlap
   for (size_t i = 0; i < files_[0].size(); i++) {
     iters->push_back(vset_->table_cache_->NewIterator(
-        options, files_[0][i]->number, files_[0][i]->file_size));
+        options, files_[0][i]->number, files_[0][i]->path_id,
+        files_[0][i]->file_size));
   }
 
   // For levels > 0, we can use a concatenating iterator that sequentially
@@ -351,9 +355,9 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       state->last_file_read = f;
       state->last_file_read_level = level;
 
-      state->s = state->vset->table_cache_->Get(*state->options, f->number,
-                                                f->file_size, state->ikey,
-                                                &state->saver, SaveValue);
+      state->s = state->vset->table_cache_->Get(
+          *state->options, f->number, f->path_id, f->file_size, state->ikey,
+          &state->saver, SaveValue);
       if (!state->s.ok()) {
         state->found = true;
         return false;
@@ -1088,7 +1092,8 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
     const std::vector<FileMetaData*>& files = current_->files_[level];
     for (size_t i = 0; i < files.size(); i++) {
       const FileMetaData* f = files[i];
-      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+      edit.AddFile(level, f->number, f->path_id, f->file_size, f->smallest,
+                   f->largest);
     }
   }
 
@@ -1136,7 +1141,8 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
         // approximate offset of "ikey" within the table.
         Table* tableptr;
         Iterator* iter = table_cache_->NewIterator(
-            ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
+            ReadOptions(), files[i]->number, files[i]->path_id,
+            files[i]->file_size, &tableptr);
         if (tableptr != nullptr) {
           result += tableptr->ApproximateOffsetOf(ikey.Encode());
         }
@@ -1233,8 +1239,9 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
       if (c->level() + which == 0) {
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
-          list[num++] = table_cache_->NewIterator(options, files[i]->number,
-                                                  files[i]->file_size);
+          list[num++] =
+              table_cache_->NewIterator(options, files[i]->number,
+                                        files[i]->path_id, files[i]->file_size);
         }
       } else {
         // Create concatenating iterator for the files from this level

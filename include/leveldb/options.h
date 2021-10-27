@@ -6,6 +6,8 @@
 #define STORAGE_LEVELDB_INCLUDE_OPTIONS_H_
 
 #include <cstddef>
+#include <string>
+#include <vector>
 
 #include "leveldb/export.h"
 
@@ -27,6 +29,14 @@ enum CompressionType {
   // part of the persistent format on disk.
   kNoCompression = 0x0,
   kSnappyCompression = 0x1
+};
+
+struct DbPath {
+  std::string path;
+  uint64_t target_size;  // Target size of total files under the path, in byte.
+
+  DbPath() : target_size(0) {}
+  DbPath(const std::string& p, uint64_t t) : path(p), target_size(t) {}
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
@@ -140,6 +150,35 @@ struct LEVELDB_EXPORT Options {
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.
   const FilterPolicy* filter_policy = nullptr;
+
+  // If true, while use multi dir(in db_paths) to store sstable file.
+  bool multi_path = true;
+
+  // A list of paths where SST files can be put into, with its target size.
+  // Newer data is placed into paths specified earlier in the vector while
+  // older data gradually moves to paths specified later in the vector.
+  //
+  // For example, you have a flash device with 10GB allocated for the DB,
+  // as well as a hard drive of 2TB, you should config it to be:
+  //   [{"/flash_path", 10GB}, {"/hard_drive", 2TB}]
+  //
+  // The system will try to guarantee data under each path is close to but
+  // not larger than the target size. But current and future file sizes used
+  // by determining where to place a file are based on best-effort estimation,
+  // which means there is a chance that the actual size under the directory
+  // is slightly more than target size under some workloads. User should give
+  // some buffer room for those cases.
+  //
+  // If none of the paths has sufficient room to place a file, the file will
+  // be placed to the last path anyway, despite to the target size.
+  //
+  // Placing newer data to earlier paths is also best-efforts. User should
+  // expect user files to be placed in higher levels in some extreme cases.
+  //
+  // If left empty, only one path will be used, which is db_name passed when
+  // opening the DB.
+  // Default: empty
+  std::vector<DbPath> db_paths;
 };
 
 // Options that control read operations

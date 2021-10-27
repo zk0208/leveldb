@@ -4,14 +4,6 @@
 
 #include "db/db_impl.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cstdint>
-#include <cstdio>
-#include <set>
-#include <string>
-#include <vector>
-
 #include "db/builder.h"
 #include "db/db_iter.h"
 #include "db/dbformat.h"
@@ -22,11 +14,22 @@
 #include "db/table_cache.h"
 #include "db/version_set.h"
 #include "db/write_batch_internal.h"
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <set>
+#include <string>
+#include <vector>
+
 #include "leveldb/db.h"
 #include "leveldb/env.h"
+#include "leveldb/options.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
+
 #include "port/port.h"
 #include "table/block.h"
 #include "table/merger.h"
@@ -55,6 +58,7 @@ struct DBImpl::CompactionState {
   // Files produced by compaction
   struct Output {
     uint64_t number;
+    uint32_t path_id;
     uint64_t file_size;
     InternalKey smallest, largest;
   };
@@ -237,6 +241,12 @@ void DBImpl::RemoveObsoleteFiles() {
 
   std::vector<std::string> filenames;
   env_->GetChildren(dbname_, &filenames);  // Ignoring errors on purpose
+  std::vector<std::vector<std::string>> filenamesVector(
+      options_.db_paths.size(), std::vector<std::string>());
+  // std::vector<std::string> tmpFilenames;
+  for (int i = 0; i < options_.db_paths.size(); i++) {
+    env_->GetChildren(options_.db_paths[i].path, &(filenamesVector[i]));
+  }
   uint64_t number;
   FileType type;
   std::vector<std::string> files_to_delete;
@@ -279,6 +289,24 @@ void DBImpl::RemoveObsoleteFiles() {
     }
   }
 
+  // delete subdir's sst 删除子文件夹下的sstable
+  for (int i = 0; i < filenamesVector.size(); i++) {
+    std::vector<std::string> deleteFiles;
+    for (std::string& filename : filenamesVector[i]) {
+      if (ParseFileName(filename, &number, &type)) {
+        bool keep = (live.find(number) != live.end());
+        if (!keep) {
+          deleteFiles.push_back(std::move(filename));
+          Log(options_.info_log, "Delete type=%d #%lld\n",
+              static_cast<int>(type), static_cast<unsigned long long>(number));
+        }
+      }
+    }
+    for (const std::string& filename : deleteFiles) {
+      env_->RemoveFile(options_.db_paths[i].path + "/" + filename);
+    }
+  }
+
   // While deleting all files unblock other threads. All files being deleted
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
@@ -296,6 +324,11 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
   env_->CreateDir(dbname_);
+
+  // create the sub dir
+  for (size_t i = 0; i < options_.db_paths.size(); i++) {
+    env_->CreateDir(options_.db_paths[i].path);
+  }
   assert(db_lock_ == nullptr);
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
   if (!s.ok()) {
@@ -341,6 +374,18 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   if (!s.ok()) {
     return s;
   }
+  // std::vector<std::vector<std::string>>
+  // filenamesVector(options_.db_paths.size(),std::vector<std::string>());
+  std::vector<std::string> tmpFilenames;
+  for (int i = 0; i < options_.db_paths.size(); i++) {
+    s = env_->GetChildren(options_.db_paths[i].path, &tmpFilenames);
+    if (!s.ok()) {
+      return s;
+    }
+    for (const std::string tmpFilename : tmpFilenames) {
+      filenames.push_back(tmpFilename);
+    }
+  }
   std::set<uint64_t> expected;
   versions_->AddLiveFiles(&expected);
   uint64_t number;
@@ -357,7 +402,9 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     char buf[50];
     std::snprintf(buf, sizeof(buf), "%d missing files; e.g.",
                   static_cast<int>(expected.size()));
-    return Status::Corruption(buf, TableFileName(dbname_, *(expected.begin())));
+    return Status::Corruption(
+        buf, TableFileName(options_.db_paths, *(expected.begin()),
+                           0));  //位置不准确，需要修复
   }
 
   // Recover in the order in which the logs were generated
@@ -508,6 +555,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   const uint64_t start_micros = env_->NowMicros();
   FileMetaData meta;
   meta.number = versions_->NewFileNumber();
+  meta.path_id = 0;  // l0层总是写到第一个文件夹
   pending_outputs_.insert(meta.number);
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
@@ -516,7 +564,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta, 0);
     mutex_.Lock();
   }
 
@@ -535,8 +583,8 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     if (base != nullptr) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
-    edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest);
+    edit->AddFile(level, meta.number, meta.file_size, meta.path_id,
+                  meta.smallest, meta.largest);
   }
 
   CompactionStats stats;
@@ -734,8 +782,8 @@ void DBImpl::BackgroundCompaction() {
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
     c->edit()->RemoveFile(c->level(), f->number);
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
-                       f->largest);
+    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->path_id,
+                       f->smallest, f->largest);
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
@@ -801,12 +849,15 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
   uint64_t file_number;
+  uint32_t path_id;
   {
     mutex_.Lock();
     file_number = versions_->NewFileNumber();
+    path_id = GetPathId(options_, compact->compaction->level() + 1);
     pending_outputs_.insert(file_number);
     CompactionState::Output out;
     out.number = file_number;
+    out.path_id = path_id;
     out.smallest.Clear();
     out.largest.Clear();
     compact->outputs.push_back(out);
@@ -814,7 +865,7 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
   }
 
   // Make the output file
-  std::string fname = TableFileName(dbname_, file_number);
+  std::string fname = TableFileName(options_.db_paths, file_number, path_id);
   Status s = env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
     compact->builder = new TableBuilder(options_, compact->outfile);
@@ -829,6 +880,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   assert(compact->builder != nullptr);
 
   const uint64_t output_number = compact->current_output()->number;
+  const uint32_t output_pathid = compact->current_output()->path_id;
   assert(output_number != 0);
 
   // Check for iterator errors
@@ -857,8 +909,8 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
 
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
-    Iterator* iter =
-        table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
+    Iterator* iter = table_cache_->NewIterator(ReadOptions(), output_number,
+                                               output_pathid, current_bytes);
     s = iter->status();
     delete iter;
     if (s.ok()) {
@@ -881,10 +933,11 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
   // Add compaction outputs
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
+  uint32_t path_id = GetPathId(options_, level + 1);
   for (size_t i = 0; i < compact->outputs.size(); i++) {
     const CompactionState::Output& out = compact->outputs[i];
     compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
-                                         out.smallest, out.largest);
+                                         path_id, out.smallest, out.largest);
   }
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
@@ -1462,6 +1515,75 @@ void DBImpl::GetApproximateSizes(const Range* range, int n, uint64_t* sizes) {
   }
 
   v->Unref();
+}
+
+static double MaxBytesForLevel(const Options* options, int level) {
+  // Note: the result for level zero is not really used since we set
+  // the level-0 compaction threshold based on number of files.
+
+  // Result for both level-0 and level-1
+  double result = 10. * 1048576.0;
+  while (level > 1) {
+    result *= 10;
+    level--;
+  }
+  return result;
+}
+
+/*
+ * Find the optimal path to place a file
+ * Given a level, finds the path where levels up to it will fit in levels
+ * up to and including this path
+ */
+uint32_t DBImpl::GetPathId(const Options& options, int level) {
+  uint32_t p = 0;
+  assert(!options.db_paths.empty());
+
+  // size remaining in the most recent path
+  uint64_t current_path_size = options.db_paths[0].target_size;
+
+  uint64_t level_size;
+  int cur_level = 0;
+
+  // max_bytes_for_level_base denotes L1 size.
+  // We estimate L0 size to be the same as L1.
+  // level_size = mutable_cf_options.max_bytes_for_level_base;
+  level_size = MaxBytesForLevel(&options, 0);
+
+  // Last path is the fallback
+  while (p < options.db_paths.size() - 1) {
+    if (level_size <= current_path_size) {
+      if (cur_level == level) {
+        // Does desired level fit in this path?
+        return p;
+      } else {
+        current_path_size -= level_size;
+        if (cur_level > 0) {
+          // if (ioptions.level_compaction_dynamic_level_bytes) {
+          //   // Currently, level_compaction_dynamic_level_bytes is ignored
+          //   when
+          //   // multiple db paths are specified. https://github.com/facebook/
+          //   // rocksdb/blob/master/db/column_family.cc.
+          //   // Still, adding this check to avoid accidentally using
+          //   // max_bytes_for_level_multiplier_additional
+          //   level_size = static_cast<uint64_t>(
+          //       level_size *
+          //       mutable_cf_options.max_bytes_for_level_multiplier);
+          // } else {
+          // level_size = static_cast<uint64_t>(
+          //     level_size * mutable_cf_options.max_bytes_for_level_multiplier
+          //     * mutable_cf_options.MaxBytesMultiplerAdditional(cur_level));
+          // }
+          level_size = MaxBytesForLevel(&options, level);
+        }
+        cur_level++;
+        continue;
+      }
+    }
+    p++;
+    current_path_size = options.db_paths[p].target_size;
+  }
+  return p;
 }
 
 // Default implementations of convenience methods that subclasses of DB

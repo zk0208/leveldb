@@ -34,9 +34,13 @@
 #include "db/table_cache.h"
 #include "db/version_edit.h"
 #include "db/write_batch_internal.h"
+#include <cstddef>
+#include <cstdint>
+
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
+#include "leveldb/status.h"
 
 namespace leveldb {
 
@@ -117,14 +121,34 @@ class Repairer {
           }
           if (type == kLogFile) {
             logs_.push_back(number);
-          } else if (type == kTableFile) {
-            table_numbers_.push_back(number);
+            /*} else if (type == kTableFile) {
+              table_numbers_.push_back(number);*/
           } else {
             // Ignore other files
           }
         }
       }
     }
+    std::vector<std::vector<std::string>> filenames_vector(
+        options_.db_paths.size(), std::vector<std::string>());
+    for (int i = 0; i < options_.db_paths.size(); i++) {
+      status = env_->GetChildren(dbname_, &(filenames_vector[i]));
+      if (!status.ok()) {
+        return status;
+      }
+      std::vector<uint64_t> tmpfilenumbers;
+      for (size_t j = 0; j < filenames_vector[i].size(); i++) {
+        if (ParseFileName(filenames_vector[i][j], &number, &type)) {
+          assert(type == kTableFile);
+          if (number + 1 > next_file_number_) {
+            next_file_number_ = number + 1;
+          }
+          tmpfilenumbers.push_back(number);
+        }
+      }
+      table_numbers_vector.push_back(tmpfilenumbers);
+    }
+
     return status;
   }
 
@@ -202,14 +226,16 @@ class Repairer {
     // since ExtractMetaData() will also generate edits.
     FileMetaData meta;
     meta.number = next_file_number_++;
+    meta.path_id = 0;  // memtable写到第1个文件夹下
     Iterator* iter = mem->NewIterator();
-    status = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    status = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta, 0);
     delete iter;
     mem->Unref();
     mem = nullptr;
     if (status.ok()) {
       if (meta.file_size > 0) {
-        table_numbers_.push_back(meta.number);
+        // table_numbers_.push_back(meta.number);
+        table_numbers_vector[0].push_back(meta.number);
       }
     }
     Log(options_.info_log, "Log #%llu: %d ops saved to Table #%llu %s",
@@ -219,8 +245,10 @@ class Repairer {
   }
 
   void ExtractMetaData() {
-    for (size_t i = 0; i < table_numbers_.size(); i++) {
-      ScanTable(table_numbers_[i]);
+    for (size_t i = 0; i < table_numbers_vector.size(); i++) {
+      for (size_t j = 0; j < table_numbers_vector[i].size(); j++) {
+        ScanTable(table_numbers_vector[i][j], i);
+      }
     }
   }
 
@@ -229,13 +257,16 @@ class Repairer {
     // on checksum verification.
     ReadOptions r;
     r.verify_checksums = options_.paranoid_checks;
-    return table_cache_->NewIterator(r, meta.number, meta.file_size);
+    return table_cache_->NewIterator(r, meta.number, meta.path_id,
+                                     meta.file_size);  // 不知道是什么 待修复
   }
 
-  void ScanTable(uint64_t number) {
+  void ScanTable(uint64_t number, std::uint32_t path_id) {
     TableInfo t;
     t.meta.number = number;
-    std::string fname = TableFileName(dbname_, number);
+    // std::string fname = TableFileName(dbname_, number); //不知道是什么
+    // 待修复
+    std::string fname = TableFileName(options_.db_paths, number, path_id);
     Status status = env_->GetFileSize(fname, &t.meta.file_size);
     if (!status.ok()) {
       // Try alternate file name.
@@ -246,8 +277,9 @@ class Repairer {
       }
     }
     if (!status.ok()) {
-      ArchiveFile(TableFileName(dbname_, number));
-      ArchiveFile(SSTTableFileName(dbname_, number));
+      // ArchiveFile(TableFileName(dbname_, number));
+      ArchiveFile(TableFileName(options_.db_paths, number, path_id));
+      ArchiveFile(SSTTableFileName(dbname_, number));  // 待修复，暂时用不到
       Log(options_.info_log, "Table #%llu: dropped: %s",
           (unsigned long long)t.meta.number, status.ToString().c_str());
       return;
@@ -296,7 +328,10 @@ class Repairer {
     // new table over the source.
 
     // Create builder.
-    std::string copy = TableFileName(dbname_, next_file_number_++);
+    // std::string copy = TableFileName(dbname_, next_file_number_++);
+    std::string copy =
+        TableFileName(options_.db_paths, next_file_number_++,
+                      t.meta.path_id);  // 不知道做什么 待修复,和源文件放一块
     WritableFile* file;
     Status s = env_->NewWritableFile(copy, &file);
     if (!s.ok()) {
@@ -332,7 +367,9 @@ class Repairer {
     file = nullptr;
 
     if (counter > 0 && s.ok()) {
-      std::string orig = TableFileName(dbname_, t.meta.number);
+      // std::string orig = TableFileName(dbname_, t.meta.number);
+      std::string orig = TableFileName(options_.db_paths, t.meta.number,
+                                       t.meta.path_id);  // 待修复
       s = env_->RenameFile(copy, orig);
       if (s.ok()) {
         Log(options_.info_log, "Table #%llu: %d entries repaired",
@@ -368,8 +405,9 @@ class Repairer {
     for (size_t i = 0; i < tables_.size(); i++) {
       // TODO(opt): separate out into multiple levels
       const TableInfo& t = tables_[i];
-      edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
-                    t.meta.largest);
+      edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.path_id,
+                    t.meta.smallest,
+                    t.meta.largest);  // 不知道干嘛 待修复
     }
 
     // std::fprintf(stderr,
@@ -436,7 +474,8 @@ class Repairer {
   VersionEdit edit_;
 
   std::vector<std::string> manifests_;
-  std::vector<uint64_t> table_numbers_;
+  // std::vector<uint64_t> table_numbers_;
+  std::vector<std::vector<uint64_t>> table_numbers_vector;
   std::vector<uint64_t> logs_;
   std::vector<TableInfo> tables_;
   uint64_t next_file_number_;
