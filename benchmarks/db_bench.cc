@@ -771,7 +771,7 @@ class Benchmark {
     options.multi_path = true;
     options.db_paths = {
         {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024},
-        {std::string(FLAGS_db) + "/vol2", (uint64_t)10 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol2", (uint64_t)80 * 1024 * 1024},
         {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
     if (FLAGS_comparisons) {
       options.comparator = &count_comparator_;

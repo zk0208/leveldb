@@ -1522,7 +1522,8 @@ static double MaxBytesForLevel(const Options* options, int level) {
   // the level-0 compaction threshold based on number of files.
 
   // Result for both level-0 and level-1
-  double result = 10. * 1048576.0;
+  // double result = 10. * 1048576.0;
+  double result = 5. * options->max_file_size;  // filesize 改为64M
   while (level > 1) {
     result *= 10;
     level--;
