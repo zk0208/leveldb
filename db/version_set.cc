@@ -4,16 +4,17 @@
 
 #include "db/version_set.h"
 
-#include <algorithm>
-#include <cstdio>
-
 #include "db/filename.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include <algorithm>
+#include <cstdio>
+
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
+
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
@@ -43,7 +44,8 @@ static double MaxBytesForLevel(const Options* options, int level) {
   // the level-0 compaction threshold based on number of files.
 
   // Result for both level-0 and level-1
-  double result = 10. * 1048576.0;
+  // double result = 10. * 1048576.0;
+  double result = 5. * options->max_file_size;
   while (level > 1) {
     result *= 10;
     level--;
