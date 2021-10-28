@@ -765,20 +765,22 @@ class Benchmark {
     options.write_buffer_size = FLAGS_write_buffer_size;
     options.max_file_size = FLAGS_max_file_size;
     options.block_size = FLAGS_block_size;
-    // 自己的配置
-    options.compression = kNoCompression;
-    options.max_open_files = 65535;
-    options.multi_path = true;
-    options.db_paths = {
-        {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024},
-        {std::string(FLAGS_db) + "/vol2", (uint64_t)80 * 1024 * 1024},
-        {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
     if (FLAGS_comparisons) {
       options.comparator = &count_comparator_;
     }
     options.max_open_files = FLAGS_open_files;
     options.filter_policy = filter_policy_;
     options.reuse_logs = FLAGS_reuse_logs;
+
+    // 自己的配置
+    options.compression = kNoCompression;
+    options.max_open_files = 65535;
+    options.multi_path = true;
+    options.db_paths = {
+        {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol2", (uint64_t)40 * 1024 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
+
     Status s = DB::Open(options, FLAGS_db, &db_);
     if (!s.ok()) {
       std::fprintf(stderr, "open error: %s\n", s.ToString().c_str());

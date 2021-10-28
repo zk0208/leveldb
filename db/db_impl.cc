@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include <set>
 #include <string>
 #include <vector>
@@ -1584,6 +1585,7 @@ uint32_t DBImpl::GetPathId(const Options& options, int level) {
     p++;
     current_path_size = options.db_paths[p].target_size;
   }
+  // std::cout << "level " << level << " in path " << p << std::endl;
   return p;
 }
 
