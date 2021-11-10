@@ -38,6 +38,7 @@
 #include "table/block.h"
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
+// #include "third_party/googletest/googlemock/include/gmock/gmock-matchers.h"
 #include "util/coding.h"
 #include "util/logging.h"
 #include "util/mutexlock.h"
@@ -62,7 +63,8 @@ struct DBImpl::CompactionState {
   // Files produced by compaction
   struct Output {
     uint64_t number;
-    uint64_t file_size;
+    uint64_t meta_file_size;
+    uint64_t total_file_size;
     InternalKey smallest, largest;
     std::vector<uint64_t> dataFiles;
   };
@@ -300,7 +302,7 @@ void DBImpl::RemoveObsoleteFiles() {
   // have unique names which will not collide with newly created files and
   // are therefore safe to delete while allowing other threads to proceed.
   mutex_.Unlock();
-  for (const uint64_t sst : sst_files_to_delete) { // 废弃
+  for (const uint64_t sst : sst_files_to_delete) {  // 废弃
     // todo 删除多余的文件
     // std::vector<uint64_t> dataNums = versions_->getDatafileNum(sst);
     // for (int i = 0; i < dataNums.size(); i++) {
@@ -308,8 +310,9 @@ void DBImpl::RemoveObsoleteFiles() {
     //                                      dataNums[i]));  //删除对应的
     //                                      data文件
     // }
-    for(int i=0;i<options_.db_paths.size();i++){
-      env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,sst)); //删除对应data文件
+    for (int i = 0; i < options_.db_paths.size(); i++) {
+      env_->RemoveFile(TableFileDataName(options_.db_paths[i].path,
+                                         sst));  //删除对应data文件
     }
   }
   for (const std::string& filename : files_to_delete) {
@@ -566,7 +569,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   }
 
   Log(options_.info_log, "Level-0 table #%llu: %lld bytes %s",
-      (unsigned long long)meta.number, (unsigned long long)meta.file_size,
+      (unsigned long long)meta.number, (unsigned long long)meta.total_file_size,
       s.ToString().c_str());
   delete iter;
   pending_outputs_.erase(meta.number);
@@ -574,7 +577,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
   int level = 0;
-  if (s.ok() && meta.file_size > 0) {
+  if (s.ok() && meta.total_file_size > 0) {
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
@@ -586,14 +589,16 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     // }
     // edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
     //               meta.largest, file_numbers); //废弃
-    edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
-                  meta.largest);
+    edit->AddFile(level, meta.number, meta.meta_file_size, meta.total_file_size,
+                  meta.smallest, meta.largest);
   }
 
   CompactionStats stats;
   stats.micros = env_->NowMicros() - start_micros;
-  stats.bytes_written = meta.file_size;
+  stats.bytes_written = meta.total_file_size;
+  stats.nums = 1;
   stats_[level].Add(stats);
+  Log(options_.info_log, "(colin) Flush time: %lld", (long long)stats.micros);
   return s;
 }
 
@@ -788,16 +793,20 @@ void DBImpl::BackgroundCompaction() {
     // c->edit()->AddFile(
     //     c->level() + 1, f->number, f->file_size, f->smallest, f->largest,
     //     std::vector<uint64_t>());  // 只是向下移动，不需要更新映射 //废弃
-    c->edit()->AddFile(c->level() + 1, f->number, f->file_size, f->smallest,
+    c->edit()->AddFile(c->level() + 1, f->number, f->meta_file_size,
+                       f->total_file_size, f->smallest,
                        f->largest);  // 只是向下移动，不需要更新映射
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
     }
     VersionSet::LevelSummaryStorage tmp;
-    Log(options_.info_log, "Moved #%lld to level-%d %lld bytes %s: %s\n",
+    Log(options_.info_log,
+        "Moved #%lld to level-%d total %lld bytes and meta size %lld bytes %s: "
+        "%s\n",
         static_cast<unsigned long long>(f->number), c->level() + 1,
-        static_cast<unsigned long long>(f->file_size),
+        static_cast<unsigned long long>(f->total_file_size),
+        static_cast<unsigned long long>(f->meta_file_size),
         status.ToString().c_str(), versions_->LevelSummary(&tmp));
   } else {
     CompactionState* compact = new CompactionState(c);
@@ -916,9 +925,11 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   } else {
     compact->builder->Abandon();
   }
-  // const uint64_t current_bytes = compact->builder->FileSize();
-  const uint64_t current_bytes = compact->builder->MetaFileSize();
-  compact->current_output()->file_size = current_bytes;
+  const uint64_t current_bytes = compact->builder->FileSize();
+  const uint64_t meta_file_size = compact->builder->MetaFileSize();
+  // const uint64_t current_bytes = compact->builder->MetaFileSize();
+  compact->current_output()->meta_file_size = meta_file_size;
+  compact->current_output()->total_file_size = current_bytes;
   compact->total_bytes += current_bytes;
   delete compact->builder;
   compact->builder = nullptr;
@@ -946,7 +957,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
     Iterator* iter =
-        table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
+        table_cache_->NewIterator(ReadOptions(), output_number, meta_file_size);
     s = iter->status();
     delete iter;
     if (s.ok()) {
@@ -975,8 +986,9 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
     // out.file_size,
     //                                      out.smallest, out.largest,
     //                                      out.dataFiles);
-    compact->compaction->edit()->AddFile(level + 1, out.number, out.file_size,
-                                         out.smallest, out.largest);
+    compact->compaction->edit()->AddFile(
+        level + 1, out.number, out.meta_file_size, out.total_file_size,
+        out.smallest, out.largest);
   }
   return versions_->LogAndApply(compact->compaction->edit(), &mutex_);
 }
@@ -1121,12 +1133,13 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   stats.micros = env_->NowMicros() - start_micros - imm_micros;
   for (int which = 0; which < 2; which++) {
     for (int i = 0; i < compact->compaction->num_input_files(which); i++) {
-      stats.bytes_read += compact->compaction->input(which, i)->file_size;
+      stats.bytes_read += compact->compaction->input(which, i)->total_file_size;
     }
   }
   for (size_t i = 0; i < compact->outputs.size(); i++) {
-    stats.bytes_written += compact->outputs[i].file_size;
+    stats.bytes_written += compact->outputs[i].total_file_size;
   }
+  stats.nums = 1;
 
   mutex_.Lock();
   stats_[compact->compaction->level() + 1].Add(stats);
@@ -1139,6 +1152,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   }
   VersionSet::LevelSummaryStorage tmp;
   Log(options_.info_log, "compacted to: %s", versions_->LevelSummary(&tmp));
+  Log(options_.info_log, "(colin) Compaction time: %lld; level: %d",
+      (long long)stats.micros, compact->compaction->level() + 1);
   return status;
 }
 
@@ -1502,17 +1517,19 @@ bool DBImpl::GetProperty(const Slice& property, std::string* value) {
     char buf[200];
     std::snprintf(buf, sizeof(buf),
                   "                               Compactions\n"
-                  "Level  Files Size(MB) Time(sec) Read(MB) Write(MB)\n"
+                  "Level  Files Size(MB) Time(sec) Read(MB) Write(MB) "
+                  "Time(micros) Compaction_Nums\n"
                   "--------------------------------------------------\n");
     value->append(buf);
     for (int level = 0; level < config::kNumLevels; level++) {
       int files = versions_->NumLevelFiles(level);
       if (stats_[level].micros > 0 || files > 0) {
-        std::snprintf(buf, sizeof(buf), "%3d %8d %8.0f %9.0f %8.0f %9.0f\n",
-                      level, files, versions_->NumLevelBytes(level) / 1048576.0,
-                      stats_[level].micros / 1e6,
-                      stats_[level].bytes_read / 1048576.0,
-                      stats_[level].bytes_written / 1048576.0);
+        std::snprintf(
+            buf, sizeof(buf), "%3d %8d %8.0f %9.0f %8.0f %9.0f %10ld %10ld\n",
+            level, files, versions_->NumLevelBytes(level) / 1048576.0,
+            stats_[level].micros / 1e6, stats_[level].bytes_read / 1048576.0,
+            stats_[level].bytes_written / 1048576.0, stats_[level].micros,
+            stats_[level].nums);
         value->append(buf);
       }
     }

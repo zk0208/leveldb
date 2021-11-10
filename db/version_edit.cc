@@ -78,7 +78,8 @@ void VersionEdit::EncodeTo(std::string* dst) const {
     PutVarint32(dst, kNewFile);
     PutVarint32(dst, new_files_[i].first);  // level
     PutVarint64(dst, f.number);
-    PutVarint64(dst, f.file_size);
+    PutVarint64(dst, f.meta_file_size);
+    PutVarint64(dst, f.total_file_size);
     PutLengthPrefixedSlice(dst, f.smallest.Encode());
     PutLengthPrefixedSlice(dst, f.largest.Encode());
     // 保存对应data映射
@@ -182,7 +183,8 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
 
       case kNewFile:
         if (GetLevel(&input, &level) && GetVarint64(&input, &f.number) &&
-            GetVarint64(&input, &f.file_size) &&
+            GetVarint64(&input, &f.meta_file_size) &&
+            GetVarint64(&input, &f.total_file_size) &&
             GetInternalKey(&input, &f.smallest) &&
             GetInternalKey(&input, &f.largest)) {
           new_files_.push_back(std::make_pair(level, f));
@@ -259,7 +261,9 @@ std::string VersionEdit::DebugString() const {
     r.append(" ");
     AppendNumberTo(&r, f.number);
     r.append(" ");
-    AppendNumberTo(&r, f.file_size);
+    AppendNumberTo(&r, f.meta_file_size);
+    r.append(" ");
+    AppendNumberTo(&r, f.total_file_size);
     r.append(" ");
     r.append(f.smallest.DebugString());
     r.append(" .. ");

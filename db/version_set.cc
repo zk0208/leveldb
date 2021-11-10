@@ -61,7 +61,7 @@ static uint64_t MaxFileSizeForLevel(const Options* options, int level) {
 static int64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   int64_t sum = 0;
   for (size_t i = 0; i < files.size(); i++) {
-    sum += files[i]->file_size;
+    sum += files[i]->total_file_size;  // 文件总大小 待检测
   }
   return sum;
 }
@@ -195,7 +195,7 @@ class Version::LevelFileNumIterator : public Iterator {
   Slice value() const override {
     assert(Valid());
     EncodeFixed64(value_buf_, (*flist_)[index_]->number);
-    EncodeFixed64(value_buf_ + 8, (*flist_)[index_]->file_size);
+    EncodeFixed64(value_buf_ + 8, (*flist_)[index_]->meta_file_size);
     return Slice(value_buf_, sizeof(value_buf_));
   }
   Status status() const override { return Status::OK(); }
@@ -233,7 +233,7 @@ void Version::AddIterators(const ReadOptions& options,
   // Merge all level zero files together since they may overlap
   for (size_t i = 0; i < files_[0].size(); i++) {
     iters->push_back(vset_->table_cache_->NewIterator(
-        options, files_[0][i]->number, files_[0][i]->file_size));
+        options, files_[0][i]->number, files_[0][i]->meta_file_size));
   }
 
   // For levels > 0, we can use a concatenating iterator that sequentially
@@ -354,7 +354,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       state->last_file_read_level = level;
 
       state->s = state->vset->table_cache_->Get(*state->options, f->number,
-                                                f->file_size, state->ikey,
+                                                f->meta_file_size, state->ikey,
                                                 &state->saver, SaveValue);
       if (!state->s.ok()) {
         state->found = true;
@@ -554,7 +554,8 @@ std::string Version::DebugString() const {
       r.push_back(' ');
       AppendNumberTo(&r, files[i]->number);
       r.push_back(':');
-      AppendNumberTo(&r, files[i]->file_size);
+      AppendNumberTo(&r,
+                     files[i]->total_file_size);  //待验证 暂时只显示total大小
       r.append("[");
       r.append(files[i]->smallest.DebugString());
       r.append(" .. ");
@@ -662,7 +663,8 @@ class VersionSet::Builder {
       // same as the compaction of 40KB of data.  We are a little
       // conservative and allow approximately one seek for every 16KB
       // of data before triggering a compaction.
-      f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
+      f->allowed_seeks =
+          static_cast<int>((f->total_file_size / 16384U));  //待验证
       if (f->allowed_seeks < 100) f->allowed_seeks = 100;
 
       levels_[level].deleted_files.erase(f->number);
@@ -1097,7 +1099,8 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
       const FileMetaData* f = files[i];
       // edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest,
       //              data_files.at(f->number)); // 废弃
-      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+      edit.AddFile(level, f->number, f->meta_file_size, f->total_file_size,
+                   f->smallest, f->largest);
     }
   }
 
@@ -1131,7 +1134,7 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
     for (size_t i = 0; i < files.size(); i++) {
       if (icmp_.Compare(files[i]->largest, ikey) <= 0) {
         // Entire file is before "ikey", so just add the file size
-        result += files[i]->file_size;
+        result += files[i]->total_file_size;  //待验证
       } else if (icmp_.Compare(files[i]->smallest, ikey) > 0) {
         // Entire file is after "ikey", so ignore
         if (level > 0) {
@@ -1145,7 +1148,8 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
         // approximate offset of "ikey" within the table.
         Table* tableptr;
         Iterator* iter = table_cache_->NewIterator(
-            ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
+            ReadOptions(), files[i]->number, files[i]->meta_file_size,
+            &tableptr);  // 待验证
         if (tableptr != nullptr) {
           result += tableptr->ApproximateOffsetOf(ikey.Encode());
         }
@@ -1242,8 +1246,9 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
       if (c->level() + which == 0) {
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
-          list[num++] = table_cache_->NewIterator(options, files[i]->number,
-                                                  files[i]->file_size);
+          list[num++] =
+              table_cache_->NewIterator(options, files[i]->number,
+                                        files[i]->meta_file_size);  // 待验证
         }
       } else {
         // Create concatenating iterator for the files from this level
@@ -1484,7 +1489,7 @@ Compaction* VersionSet::CompactRange(int level, const InternalKey* begin,
     const uint64_t limit = MaxFileSizeForLevel(options_, level);
     uint64_t total = 0;
     for (size_t i = 0; i < inputs.size(); i++) {
-      uint64_t s = inputs[i]->file_size;
+      uint64_t s = inputs[i]->total_file_size;  // 待验证
       total += s;
       if (total >= limit) {
         inputs.resize(i + 1);
@@ -1567,7 +1572,8 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
                        grandparents_[grandparent_index_]->largest.Encode()) >
              0) {
     if (seen_key_) {
-      overlapped_bytes_ += grandparents_[grandparent_index_]->file_size;
+      overlapped_bytes_ +=
+          grandparents_[grandparent_index_]->total_file_size;  // 待验证
     }
     grandparent_index_++;
   }

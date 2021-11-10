@@ -78,7 +78,7 @@ class Repairer {
     if (status.ok()) {
       unsigned long long bytes = 0;
       for (size_t i = 0; i < tables_.size(); i++) {
-        bytes += tables_[i].meta.file_size;
+        bytes += tables_[i].meta.total_file_size;  //不知道干嘛 待修复
       }
       Log(options_.info_log,
           "**** Repaired leveldb %s; "
@@ -209,7 +209,7 @@ class Repairer {
     mem->Unref();
     mem = nullptr;
     if (status.ok()) {
-      if (meta.file_size > 0) {
+      if (meta.total_file_size > 0) {  //不知道干嘛 待修复
         table_numbers_.push_back(meta.number);
       }
     }
@@ -230,18 +230,21 @@ class Repairer {
     // on checksum verification.
     ReadOptions r;
     r.verify_checksums = options_.paranoid_checks;
-    return table_cache_->NewIterator(r, meta.number, meta.file_size);
+    return table_cache_->NewIterator(r, meta.number,
+                                     meta.meta_file_size);  // 不知道干嘛 待修复
   }
 
   void ScanTable(uint64_t number) {
     TableInfo t;
     t.meta.number = number;
     std::string fname = TableFileName(dbname_, number);
-    Status status = env_->GetFileSize(fname, &t.meta.file_size);
+    Status status =
+        env_->GetFileSize(fname, &t.meta.meta_file_size);  // 不知道干嘛 待修复
     if (!status.ok()) {
       // Try alternate file name.
       fname = SSTTableFileName(dbname_, number);
-      Status s2 = env_->GetFileSize(fname, &t.meta.file_size);
+      Status s2 = env_->GetFileSize(
+          fname, &t.meta.meta_file_size);  // 不知道干嘛 待修复
       if (s2.ok()) {
         status = Status::OK();
       }
@@ -320,7 +323,8 @@ class Repairer {
     } else {
       s = builder->Finish();
       if (s.ok()) {
-        t.meta.file_size = builder->FileSize();
+        t.meta.meta_file_size = builder->MetaFileSize();
+        t.meta.total_file_size = builder->FileSize();
       }
     }
     delete builder;
@@ -372,8 +376,8 @@ class Repairer {
       // edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
       //               t.meta.largest,
       //               std::vector<uint64_t>());  // todo 暂时用不到 待修复
-      edit_.AddFile(0, t.meta.number, t.meta.file_size, t.meta.smallest,
-                    t.meta.largest);
+      edit_.AddFile(0, t.meta.number, t.meta.meta_file_size,
+                    t.meta.total_file_size, t.meta.smallest, t.meta.largest);
     }
 
     // std::fprintf(stderr,

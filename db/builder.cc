@@ -19,7 +19,8 @@ namespace leveldb {
 Status BuildTable(const std::string& dbname, Env* env, const Options& options,
                   TableCache* table_cache, Iterator* iter, FileMetaData* meta) {
   Status s;
-  meta->file_size = 0;
+  meta->meta_file_size = 0;
+  meta->total_file_size = 0;
   iter->SeekToFirst();
 
   std::string fname = TableFileName(dbname, meta->number);
@@ -58,7 +59,8 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     s = builder->Finish();
     if (s.ok()) {
       // meta->file_size = builder->FileSize();
-      meta->file_size = builder->MetaFileSize();
+      meta->meta_file_size = builder->MetaFileSize();
+      meta->total_file_size = builder->FileSize();
       assert(meta->file_size > 0);
     }
     delete builder;
@@ -76,7 +78,7 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     if (s.ok()) {
       // Verify that the table is usable
       Iterator* it = table_cache->NewIterator(ReadOptions(), meta->number,
-                                              meta->file_size);
+                                              meta->meta_file_size);
       s = it->status();
       delete it;
     }
@@ -87,7 +89,7 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     s = iter->status();
   }
 
-  if (s.ok() && meta->file_size > 0) {
+  if (s.ok() && meta->meta_file_size > 0) {
     // Keep it
   } else {
     env->RemoveFile(fname);
@@ -100,7 +102,8 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
                          Iterator* iter,
                          const std::vector<FileMetaData*>& files) {
   Status s;
-  files[0]->file_size = 0;
+  files[0]->meta_file_size = 0;
+  files[0]->total_file_size = 0;
   iter->SeekToFirst();
 
   std::string fname = TableFileName(dbname, files[0]->number);
@@ -149,7 +152,8 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     // Finish and check for builder errors
     s = builder->Finish();
     if (s.ok()) {
-      files[0]->file_size = builder->FileSize();
+      files[0]->meta_file_size = builder->MetaFileSize();
+      files[0]->total_file_size = builder->FileSize();
       assert(files[0]->file_size > 0);
     }
     delete builder;
@@ -167,7 +171,7 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     if (s.ok()) {
       // Verify that the table is usable
       Iterator* it = table_cache->NewIterator(ReadOptions(), files[0]->number,
-                                              files[0]->file_size);
+                                              files[0]->meta_file_size);
       s = it->status();
       delete it;
     }
@@ -178,7 +182,7 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     s = iter->status();
   }
 
-  if (s.ok() && files[0]->file_size > 0) {
+  if (s.ok() && files[0]->meta_file_size > 0) {
     // Keep it
   } else {
     env->RemoveFile(fname);

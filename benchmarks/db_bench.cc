@@ -776,6 +776,7 @@ class Benchmark {
     options_.reuse_logs = FLAGS_reuse_logs;
     options_.multi_path = true;
     options_.compression = kNoCompression;
+    // options_.max_open_files = 4000;  // 可能文件打开太多？
     options_.db_paths = {
         {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024 * 1024},
         {std::string(FLAGS_db) + "/vol2", (uint64_t)3 * 1024 * 1024 * 1024},
