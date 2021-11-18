@@ -34,6 +34,8 @@
 #include "db/table_cache.h"
 #include "db/version_edit.h"
 #include "db/write_batch_internal.h"
+#include <cstdint>
+
 #include "leveldb/comparator.h"
 #include "leveldb/db.h"
 #include "leveldb/env.h"
@@ -203,7 +205,9 @@ class Repairer {
     FileMetaData meta;
     meta.number = next_file_number_++;
     Iterator* iter = mem->NewIterator();
-    status = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    uint64_t sort_time;
+    status = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta,
+                        sort_time);
     delete iter;
     mem->Unref();
     mem = nullptr;

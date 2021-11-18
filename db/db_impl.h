@@ -90,19 +90,22 @@ class DBImpl : public DB {
   // Per level compaction stats.  stats_[level] stores the stats for
   // compactions that produced data for the specified "level".
   struct CompactionStats {
-    CompactionStats() : micros(0), bytes_read(0), bytes_written(0), nums(0) {}
+    CompactionStats()
+        : micros(0), bytes_read(0), bytes_written(0), nums(0), sort_time(0) {}
 
     void Add(const CompactionStats& c) {
       this->micros += c.micros;
       this->bytes_read += c.bytes_read;
       this->bytes_written += c.bytes_written;
       this->nums += c.nums;
+      this->sort_time += c.sort_time;
     }
 
     int64_t micros;
     int64_t bytes_read;
     int64_t bytes_written;
     int64_t nums;
+    int64_t sort_time;
   };
 
   Iterator* NewInternalIterator(const ReadOptions&,
@@ -151,7 +154,8 @@ class DBImpl : public DB {
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   Status OpenCompactionOutputFile(CompactionState* compact);
-  Status FinishCompactionOutputFile(CompactionState* compact, Iterator* input);
+  Status FinishCompactionOutputFile(CompactionState* compact, Iterator* input,
+                                    uint64_t& sort_time);
   Status InstallCompactionResults(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 

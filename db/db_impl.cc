@@ -515,9 +515,11 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
       (unsigned long long)meta.number);
 
   Status s;
+  uint64_t sort_time;
   {
     mutex_.Unlock();
-    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
+    s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta,
+                   sort_time);
     mutex_.Lock();
   }
 
@@ -544,6 +546,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   stats.micros = env_->NowMicros() - start_micros;
   stats.bytes_written = meta.file_size;
   stats.nums = 1;
+  stats.sort_time = sort_time;
   stats_[level].Add(stats);
   return s;
 }
@@ -825,7 +828,8 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
 }
 
 Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
-                                          Iterator* input) {
+                                          Iterator* input,
+                                          uint64_t& sort_time) {
   assert(compact != nullptr);
   assert(compact->outfile != nullptr);
   assert(compact->builder != nullptr);
@@ -838,6 +842,7 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   const uint64_t current_entries = compact->builder->NumEntries();
   if (s.ok()) {
     s = compact->builder->Finish();
+    sort_time = compact->builder->sortTime();
   } else {
     compact->builder->Abandon();
   }
@@ -894,6 +899,8 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
 Status DBImpl::DoCompactionWork(CompactionState* compact) {
   const uint64_t start_micros = env_->NowMicros();
   int64_t imm_micros = 0;  // Micros spent doing imm_ compactions
+  uint64_t sort_times = 0;
+  uint64_t sort_time = 0;
 
   Log(options_.info_log, "Compacting %d@%d + %d@%d files",
       compact->compaction->num_input_files(0), compact->compaction->level(),
@@ -937,7 +944,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     Slice key = input->key();
     if (compact->compaction->ShouldStopBefore(key) &&
         compact->builder != nullptr) {
-      status = FinishCompactionOutputFile(compact, input);
+      sort_time = 0;
+      status = FinishCompactionOutputFile(compact, input, sort_time);
+      sort_times += sort_time;
       if (!status.ok()) {
         break;
       }
@@ -1005,7 +1014,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
       // Close output file if it is big enough
       if (compact->builder->FileSize() >=
           compact->compaction->MaxOutputFileSize()) {
-        status = FinishCompactionOutputFile(compact, input);
+        sort_time = 0;
+        status = FinishCompactionOutputFile(compact, input, sort_time);
+        sort_times += sort_time;
         if (!status.ok()) {
           break;
         }
@@ -1019,7 +1030,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     status = Status::IOError("Deleting DB during compaction");
   }
   if (status.ok() && compact->builder != nullptr) {
-    status = FinishCompactionOutputFile(compact, input);
+    sort_time = 0;
+    status = FinishCompactionOutputFile(compact, input, sort_time);
+    sort_times += sort_time;
   }
   if (status.ok()) {
     status = input->status();
@@ -1038,6 +1051,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
     stats.bytes_written += compact->outputs[i].file_size;
   }
   stats.nums = 1;
+  stats.sort_time = sort_times;
 
   mutex_.Lock();
   stats_[compact->compaction->level() + 1].Add(stats);
@@ -1414,18 +1428,19 @@ bool DBImpl::GetProperty(const Slice& property, std::string* value) {
     std::snprintf(buf, sizeof(buf),
                   "                               Compactions\n"
                   "Level  Files Size(MB) Time(sec) Read(MB) Write(MB) "
-                  "Time(micros) Compaction_Nums\n"
+                  "Time(micros) Compaction_Nums sort_times\n"
                   "--------------------------------------------------\n");
     value->append(buf);
     for (int level = 0; level < config::kNumLevels; level++) {
       int files = versions_->NumLevelFiles(level);
       if (stats_[level].micros > 0 || files > 0) {
         std::snprintf(
-            buf, sizeof(buf), "%3d %8d %8.0f %9.0f %8.0f %9.0f %10ld %10ld\n",
-            level, files, versions_->NumLevelBytes(level) / 1048576.0,
+            buf, sizeof(buf),
+            "%3d %8d %8.0f %9.0f %8.0f %9.0f %10ld %10ld %10ld\n", level, files,
+            versions_->NumLevelBytes(level) / 1048576.0,
             stats_[level].micros / 1e6, stats_[level].bytes_read / 1048576.0,
             stats_[level].bytes_written / 1048576.0, stats_[level].micros,
-            stats_[level].nums);
+            stats_[level].nums, stats_[level].sort_time);
         value->append(buf);
       }
     }

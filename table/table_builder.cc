@@ -5,11 +5,13 @@
 #include "leveldb/table_builder.h"
 
 #include <cassert>
+#include <cstdint>
 
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
+
 #include "table/block_builder.h"
 #include "table/filter_block.h"
 #include "table/format.h"
@@ -27,6 +29,7 @@ struct TableBuilder::Rep {
         data_block(&options),
         index_block(&index_block_options),
         num_entries(0),
+        sort_time(0),
         closed(false),
         filter_block(opt.filter_policy == nullptr
                          ? nullptr
@@ -60,6 +63,9 @@ struct TableBuilder::Rep {
   BlockHandle pending_handle;  // Handle to add to index block
 
   std::string compressed_output;
+
+  uint64_t sort_time;
+  uint64_t start_micros;
 };
 
 TableBuilder::TableBuilder(const Options& options, WritableFile* file)
@@ -98,6 +104,9 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
   if (r->num_entries > 0) {
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
+  if (r->data_block.empty()) {
+    r->start_micros = r->options.env->NowMicros();
+  }
 
   if (r->pending_index_entry) {
     assert(r->data_block.empty());
@@ -127,6 +136,7 @@ void TableBuilder::Flush() {
   assert(!r->closed);
   if (!ok()) return;
   if (r->data_block.empty()) return;
+  r->sort_time += r->options.env->NowMicros() - r->start_micros;
   assert(!r->pending_index_entry);
   WriteBlock(&r->data_block, &r->pending_handle);
   if (ok()) {
@@ -261,5 +271,7 @@ void TableBuilder::Abandon() {
 uint64_t TableBuilder::NumEntries() const { return rep_->num_entries; }
 
 uint64_t TableBuilder::FileSize() const { return rep_->offset; }
+
+uint64_t TableBuilder::sortTime() const { return rep_->sort_time; }
 
 }  // namespace leveldb
