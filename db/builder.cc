@@ -8,6 +8,7 @@
 #include "db/filename.h"
 #include "db/table_cache.h"
 #include "db/version_edit.h"
+#include <cstddef>
 // #include <bits/stdint-uintn.h>
 
 #include "leveldb/db.h"
@@ -61,16 +62,31 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
       // meta->file_size = builder->FileSize();
       meta->meta_file_size = builder->MetaFileSize();
       meta->total_file_size = builder->FileSize();
-      assert(meta->file_size > 0);
+      assert(meta->meta_file_size > 0);
     }
     delete builder;
 
     // Finish and check for file errors
     if (s.ok()) {
+      for (size_t i = 0; i < datafiles.size(); i++) {
+        if (s.ok()) {
+          s = datafiles[i]->Sync();
+        } else {
+          break;
+        }
+      }
+    }
+    if (s.ok()) {
       s = file->Sync();
     }
     if (s.ok()) {
       s = file->Close();
+      for (auto& datafile : datafiles) {
+        s = datafile->Close();
+        if (!s.ok()) {
+          break;
+        }
+      }
     }
     delete file;
     file = nullptr;
@@ -154,7 +170,7 @@ Status BuildTableFromMem(const std::string& dbname, Env* env,
     if (s.ok()) {
       files[0]->meta_file_size = builder->MetaFileSize();
       files[0]->total_file_size = builder->FileSize();
-      assert(files[0]->file_size > 0);
+      assert(files[0]->meta_file_size > 0);
     }
     delete builder;
 
