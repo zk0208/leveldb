@@ -97,7 +97,7 @@ static int TableCacheSize(const Options& sanitized_options) {
 }
 
 // TEST(BuilderTest, speed) {
-void builderTest(std::string db_name, int nums) {
+void builderTest(std::string db_name, int nums, int filenums) {
   InternalKeyComparator cmp(BytewiseComparator());
   MemTable* mem = new MemTable(cmp);
   mem->Ref();
@@ -126,15 +126,21 @@ void builderTest(std::string db_name, int nums) {
   std::cout << "build table 开始时间：" << dt << std::endl;
 
   uint64_t start = options.env->NowMicros();
-  Status s =
-      BuildTable(db_name, options.env, options, table_cache_, iter, &meta);
+  for (int i = 1; i <= filenums; i++) {
+    meta.number = i;
+    Status s =
+        BuildTable(db_name, options.env, options, table_cache_, iter, &meta);
+    if (!s.ok()) {
+      std::cout << "build 出错" << std::endl;
+    }
+  }
   uint64_t end = options.env->NowMicros();
   std::cout << "spend time in build table: " << end - start << " micros"
             << std::endl;
   now = time(0);
   dt = ctime(&now);
   std::cout << "build table 结束时间：" << dt << std::endl;
-  EXPECT_TRUE(s.ok());
+  // EXPECT_TRUE(s.ok());
 }
 
 // static std::string PrintContents(WriteBatch* b) {
@@ -263,18 +269,22 @@ int main(int argc, char** argv) {
   // return RUN_ALL_TESTS();
   std::string db_;
   int nums_ = 0;
-  if (argc != 3) {
+  int filenums_ = 1;
+  if (argc < 3) {
     std::fprintf(stderr, "Invalid flag num %d!\n", argc - 1);
     std::exit(1);
   }
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
+    int fn;
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--db=")) {
       db_ = argv[i] + strlen("--db=");
     } else if (sscanf(argv[i], "--nums=%d%c", &n, &junk) == 1) {
       nums_ = n;
+    } else if (sscanf(argv[i], "--filenums=%d%c", &fn, &junk) == 1) {
+      filenums_ = fn;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
@@ -282,6 +292,6 @@ int main(int argc, char** argv) {
   }
   std::cout << "db = " << db_ << std::endl;
   std::cout << "nums = " << nums_ << std::endl;
-  leveldb::builderTest(db_, nums_);
+  leveldb::builderTest(db_, nums_, filenums_);
   return 0;
 }

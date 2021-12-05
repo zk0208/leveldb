@@ -9,7 +9,10 @@
 #include "db/table_cache.h"
 #include "db/version_edit.h"
 #include <cstddef>
+#include <cstdint>
 // #include <bits/stdint-uintn.h>
+
+#include <iostream>
 
 #include "leveldb/db.h"
 #include "leveldb/env.h"
@@ -70,7 +73,12 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     if (s.ok()) {
       for (size_t i = 0; i < datafiles.size(); i++) {
         if (s.ok()) {
+          uint64_t sync_start = env->NowMicros();
+          uint64_t sync_end = 0;
           s = datafiles[i]->Sync();
+          sync_end = env->NowMicros();
+          std::cout << "spend time in sync for file " << i << " : "
+                    << sync_end - sync_start << " micros" << std::endl;
         } else {
           break;
         }
