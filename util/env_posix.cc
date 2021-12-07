@@ -2,16 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include <dirent.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include <sys/mman.h>
-#include <sys/resource.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
@@ -19,17 +9,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <iostream>
 #include <limits>
+#include <pthread.h>
 #include <queue>
 #include <set>
 #include <string>
+#include <sys/mman.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
 #include <thread>
 #include <type_traits>
+#include <unistd.h>
 #include <utility>
 
 #include "leveldb/env.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
+
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/env_posix_test_helper.h"
@@ -329,9 +330,28 @@ class PosixWritableFile final : public WritableFile {
     return status;
   }
 
+  uint64_t MyNowMicros() {
+    static constexpr uint64_t kUsecondsPerSecond = 1000000;
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    return static_cast<uint64_t>(tv.tv_sec) * kUsecondsPerSecond + tv.tv_usec;
+  }
+
   Status WriteUnbuffered(const char* data, size_t size) {
     while (size > 0) {
+      // {
+      //   // 基于当前系统的当前日期/时间
+      //   time_t now = time(0);
+
+      //   // 把 now 转换为字符串形式
+      //   char* dt = ctime(&now);
+      //   std::cout << dt << " : "
+      //             << "write call" << std::endl;
+      // }
+      // uint64_t now = MyNowMicros();
       ssize_t write_result = ::write(fd_, data, size);
+      // std::cout << "syscall write size: " << size << std::endl;
+      // std::cout << "write: " << now << std::endl;
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry

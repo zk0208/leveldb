@@ -101,7 +101,7 @@ static int TableCacheSize(const Options& sanitized_options) {
 }
 
 // TEST(BuilderTest, speed) {
-void builderTest(std::string db_name, int nums) {
+void builderTest(std::string db_name, int nums, int filenums) {
   InternalKeyComparator cmp(BytewiseComparator());
   MemTable* mem = new MemTable(cmp);
   mem->Ref();
@@ -114,7 +114,7 @@ void builderTest(std::string db_name, int nums) {
   options.compression = kNoCompression;  // 不压缩
   auto table_cache_ = new TableCache(db_name, options, TableCacheSize(options));
   FileMetaData meta;
-  meta.number = 1;
+  // meta.number = 1;
 
   // 基于当前系统的当前日期/时间
   time_t now = time(0);
@@ -122,15 +122,36 @@ void builderTest(std::string db_name, int nums) {
   // 把 now 转换为字符串形式
   char* dt = ctime(&now);
 
+  time_t sync;
+
   std::cout << "build table 开始时间：" << dt << std::endl;
+  uint64_t syncTime = 0;
   uint64_t start = options.env->NowMicros();
-  BuildTable(db_name, options.env, options, table_cache_, iter, &meta);
+  uint64_t writeEnd = 0;
+  for (int i = 1; i <= filenums; i++) {
+    meta.number = i;
+    Status s = BuildTableForTest(db_name, options.env, options, table_cache_,
+                                 iter, &meta, syncTime, sync, writeEnd);
+    if (!s.ok()) {
+      std::cout << "build 出错！" << std::endl;
+    }
+  }
+
   uint64_t end = options.env->NowMicros();
-  std::cout << "spend time in build table: " << end - start << " micros"
-            << std::endl;
   now = time(0);
   dt = ctime(&now);
   std::cout << "build table 结束时间：" << dt << std::endl;
+  // std::cout << "sync time :" << ctime(&sync) << std::endl;
+  std::cout << "start time = " << start << std::endl;
+  std::cout << "end time = " << end << std::endl;
+  // std::cout << "sync time = " << syncTime << std::endl;
+  // std::cout << "sync time start at: " << syncTime - start << " micros"
+  //           << std::endl;
+  // std::cout << "spend time in write: " << writeEnd - start << " micros"
+  //           << std::endl;
+  std::cout << "spend time in build table: " << end - start << " micros"
+            << std::endl;
+  // EXPECT_TRUE(s.ok());
 }
 
 // static std::string PrintContents(WriteBatch* b) {
@@ -259,18 +280,22 @@ int main(int argc, char** argv) {
   //  return RUN_ALL_TESTS();
   std::string db_;
   int nums_ = 0;
-  if (argc != 3) {
+  int filenums_ = 1;
+  if (argc < 3) {
     std::fprintf(stderr, "Invalid flag num %d!\n", argc - 1);
     std::exit(1);
   }
   for (int i = 1; i < argc; i++) {
     double d;
     int n;
+    int fn;
     char junk;
     if (leveldb::Slice(argv[i]).starts_with("--db=")) {
       db_ = argv[i] + strlen("--db=");
     } else if (sscanf(argv[i], "--nums=%d%c", &n, &junk) == 1) {
       nums_ = n;
+    } else if (sscanf(argv[i], "--filenums=%d%c", &fn, &junk) == 1) {
+      filenums_ = fn;
     } else {
       std::fprintf(stderr, "Invalid flag '%s'\n", argv[i]);
       std::exit(1);
@@ -278,6 +303,7 @@ int main(int argc, char** argv) {
   }
   std::cout << "db = " << db_ << std::endl;
   std::cout << "nums = " << nums_ << std::endl;
-  leveldb::builderTest(db_, nums_);
+  std::cout << "file nums = " << filenums_ << std::endl;
+  leveldb::builderTest(db_, nums_, filenums_);
   return 0;
 }
