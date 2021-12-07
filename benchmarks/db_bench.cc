@@ -887,13 +887,30 @@ class Benchmark {
     }
   }
 
+  // void ReadHot(ThreadState* thread) {
+  //   ReadOptions options;
+  //   std::string value;
+  //   const int range = (FLAGS_num + 99) / 100;
+  //   KeyBuffer key;
+  //   for (int i = 0; i < reads_; i++) {
+  //     const int k = thread->rand.Uniform(range);
+  //     key.Set(k);
+  //     db_->Get(options, key.slice(), &value);
+  //     thread->stats.FinishedSingleOp();
+  //   }
+  // }
+
+  // 读刚刚写下去的部分
   void ReadHot(ThreadState* thread) {
     ReadOptions options;
     std::string value;
+    //暂时先读1%吧
     const int range = (FLAGS_num + 99) / 100;
+    const int shifting = FLAGS_num - range;
     KeyBuffer key;
     for (int i = 0; i < reads_; i++) {
-      const int k = thread->rand.Uniform(range);
+      // 读最后的1%的数据，如果是顺序插入的话 会读处于上层的数据
+      const int k = (thread->rand.Uniform(range)) + shifting;
       key.Set(k);
       db_->Get(options, key.slice(), &value);
       thread->stats.FinishedSingleOp();
