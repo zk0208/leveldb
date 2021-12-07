@@ -937,15 +937,15 @@ Status DBImpl::FinishCompactionOutputFile(CompactionState* compact,
   // Finish and check for file errors
   if (s.ok()) {
     s = compact->outfile->Sync();
-    for (auto& d : compact->data_outfiles) {
-      d->Sync();
-    }
+    // for (auto& d : compact->data_outfiles) {
+    //   d->Sync();
+    // }
   }
   if (s.ok()) {
     s = compact->outfile->Close();
-    for (auto& d : compact->data_outfiles) {
-      d->Close();
-    }
+    // for (auto& d : compact->data_outfiles) {
+    //   d->Close();
+    // }
   }
   delete compact->outfile;
   for (auto& d : compact->data_outfiles) {

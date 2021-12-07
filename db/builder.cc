@@ -70,34 +70,37 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     delete builder;
 
     // Finish and check for file errors
-    if (s.ok()) {
-      for (size_t i = 0; i < datafiles.size(); i++) {
-        if (s.ok()) {
-          uint64_t sync_start = env->NowMicros();
-          uint64_t sync_end = 0;
-          s = datafiles[i]->Sync();
-          sync_end = env->NowMicros();
-          std::cout << "spend time in sync for file " << i << " : "
-                    << sync_end - sync_start << " micros" << std::endl;
-        } else {
-          break;
-        }
-      }
-    }
+    // if (s.ok()) {
+    //   for (size_t i = 0; i < datafiles.size(); i++) {
+    //     if (s.ok()) {
+    //       uint64_t sync_start = env->NowMicros();
+    //       uint64_t sync_end = 0;
+    //       s = datafiles[i]->Sync();
+    //       sync_end = env->NowMicros();
+    //       std::cout << "spend time in sync for file " << i << " : "
+    //                 << sync_end - sync_start << " micros" << std::endl;
+    //     } else {
+    //       break;
+    //     }
+    //   }
+    // }
     if (s.ok()) {
       s = file->Sync();
     }
     if (s.ok()) {
       s = file->Close();
-      for (auto& datafile : datafiles) {
-        s = datafile->Close();
-        if (!s.ok()) {
-          break;
-        }
-      }
+      // for (auto& datafile : datafiles) {
+      //   s = datafile->Close();
+      //   if (!s.ok()) {
+      //     break;
+      //   }
+      // }
     }
     delete file;
     file = nullptr;
+    for (auto& f : datafiles) {
+      delete f;
+    }
 
     if (s.ok()) {
       // Verify that the table is usable

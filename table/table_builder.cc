@@ -531,6 +531,9 @@ void TableBuilder::BackgroundThreadEntryPoint(int index) {
       r->cv_empty.notify_all();
     }
   }
+  // 数据全部写完，在各自线程中完成数据写入
+  r->files[index]->Sync();
+  r->files[index]->Close();
   // std::cout << "线程 " << index << " 结束！" << std::endl;
 }
 
