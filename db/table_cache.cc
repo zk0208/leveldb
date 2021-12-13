@@ -45,7 +45,7 @@ TableCache::TableCache(const std::string& dbname, const Options& options,
 TableCache::~TableCache() { delete cache_; }
 
 Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
-                             Cache::Handle** handle) {
+                             Cache::Handle** handle, bool direct_io) {
   Status s;
   char buf[sizeof(file_number)];
   EncodeFixed64(buf, file_number);
@@ -68,15 +68,15 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
     RandomAccessFile* file = nullptr;
     std::vector<RandomAccessFile*> files;
     Table* table = nullptr;
-    s = env_->NewRandomAccessFile(fname, &file);
+    s = env_->NewRandomAccessFile(fname, &file, direct_io);
     for (int i = 0; i < fnames.size(); i++) {
       RandomAccessFile* tmpfile;
-      env_->NewRandomAccessFile(fnames[i], &tmpfile);
+      env_->NewRandomAccessFile(fnames[i], &tmpfile, direct_io);
       files.push_back(tmpfile);
     }
     if (!s.ok()) {
       std::string old_fname = SSTTableFileName(dbname_, file_number);
-      if (env_->NewRandomAccessFile(old_fname, &file).ok()) {
+      if (env_->NewRandomAccessFile(old_fname, &file).ok(), direct_io) {
         s = Status::OK();
       }
     }
@@ -115,7 +115,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Cache::Handle* handle = nullptr;
-  Status s = FindTable(file_number, file_size, &handle);
+  Status s = FindTable(file_number, file_size, &handle, options.direct_io);
   if (!s.ok()) {
     return NewErrorIterator(s);
   }
@@ -134,7 +134,7 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)) {
   Cache::Handle* handle = nullptr;
-  Status s = FindTable(file_number, file_size, &handle);
+  Status s = FindTable(file_number, file_size, &handle, options.direct_io);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
     s = t->InternalGet(options, k, arg, handle_result);

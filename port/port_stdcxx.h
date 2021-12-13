@@ -145,6 +145,8 @@ inline uint32_t AcceleratedCRC32C(uint32_t crc, const char* buf, size_t size) {
 #endif  // HAVE_CRC32C
 }
 
+static inline void AsmVolatilePause() { asm volatile("pause"); }
+
 }  // namespace port
 }  // namespace leveldb
 

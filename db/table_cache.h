@@ -48,7 +48,8 @@ class TableCache {
   void SetVersionSet(VersionSet* versionset) { versions_ = versionset; }
 
  private:
-  Status FindTable(uint64_t file_number, uint64_t file_size, Cache::Handle**);
+  Status FindTable(uint64_t file_number, uint64_t file_size, Cache::Handle**,
+                   bool direct_io);
 
   Env* const env_;
   VersionSet* versions_;
