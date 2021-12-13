@@ -5,8 +5,10 @@
 #include "db/table_cache.h"
 
 #include "db/filename.h"
+
 #include "leveldb/env.h"
 #include "leveldb/table.h"
+
 #include "util/coding.h"
 
 namespace leveldb {
@@ -39,7 +41,7 @@ TableCache::TableCache(const std::string& dbname, const Options& options,
 TableCache::~TableCache() { delete cache_; }
 
 Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
-                             Cache::Handle** handle) {
+                             Cache::Handle** handle, bool direct_io) {
   Status s;
   char buf[sizeof(file_number)];
   EncodeFixed64(buf, file_number);
@@ -49,10 +51,10 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
     std::string fname = TableFileName(dbname_, file_number);
     RandomAccessFile* file = nullptr;
     Table* table = nullptr;
-    s = env_->NewRandomAccessFile(fname, &file);
+    s = env_->NewRandomAccessFile(fname, &file, direct_io);
     if (!s.ok()) {
       std::string old_fname = SSTTableFileName(dbname_, file_number);
-      if (env_->NewRandomAccessFile(old_fname, &file).ok()) {
+      if (env_->NewRandomAccessFile(old_fname, &file, direct_io).ok()) {
         s = Status::OK();
       }
     }
@@ -83,7 +85,7 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Cache::Handle* handle = nullptr;
-  Status s = FindTable(file_number, file_size, &handle);
+  Status s = FindTable(file_number, file_size, &handle, options.direct_io);
   if (!s.ok()) {
     return NewErrorIterator(s);
   }
@@ -102,7 +104,7 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)) {
   Cache::Handle* handle = nullptr;
-  Status s = FindTable(file_number, file_size, &handle);
+  Status s = FindTable(file_number, file_size, &handle, options.direct_io);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
     s = t->InternalGet(options, k, arg, handle_result);
