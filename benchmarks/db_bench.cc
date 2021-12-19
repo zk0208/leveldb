@@ -68,6 +68,8 @@ static int FLAGS_num = 1000000;
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
 
+static int FLAGS_scanLength = -1;
+
 // Number of concurrent threads to run.
 static int FLAGS_threads = 1;
 
@@ -120,6 +122,9 @@ static bool FLAGS_reuse_logs = false;
 
 // Use the db with the following name.
 static const char* FLAGS_db = nullptr;
+
+// Use direct_io in read
+static bool FLAGS_direct_io = false;
 
 namespace leveldb {
 
@@ -375,6 +380,7 @@ class Benchmark {
   int value_size_;
   int entries_per_batch_;
   WriteOptions write_options_;
+  int scanLength_;
   int reads_;
   int heap_counter_;
   CountComparator count_comparator_;
@@ -469,6 +475,7 @@ class Benchmark {
         value_size_(FLAGS_value_size),
         entries_per_batch_(1),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
+        scanLength_(FLAGS_scanLength < 0 ? 1000 : FLAGS_scanLength),
         heap_counter_(0),
         count_comparator_(BytewiseComparator()),
         total_thread_count_(0) {
@@ -534,6 +541,9 @@ class Benchmark {
       } else if (name == Slice("overwrite")) {
         fresh_db = false;
         method = &Benchmark::WriteRandom;
+      } else if (name == Slice("writehot")) {
+        fresh_db = false;
+        method = &Benchmark::WriteHot;
       } else if (name == Slice("fillsync")) {
         fresh_db = true;
         num_ /= 1000;
@@ -558,6 +568,9 @@ class Benchmark {
         method = &Benchmark::SeekOrdered;
       } else if (name == Slice("readhot")) {
         method = &Benchmark::ReadHot;
+      } else if (name == Slice("scan")) {
+        method = &Benchmark::Scan;
+        std::cout << "scan length = " << scanLength_ << std::endl;
       } else if (name == Slice("readrandomsmall")) {
         reads_ /= 1000;
         method = &Benchmark::ReadRandom;
@@ -777,8 +790,8 @@ class Benchmark {
     options.max_open_files = 65535;
     options.multi_path = true;
     options.db_paths = {
-        {std::string(FLAGS_db) + "/vol1", (uint64_t)1 * 1024 * 1024 * 1024},
-        {std::string(FLAGS_db) + "/vol2", (uint64_t)40 * 1024 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol1", (uint64_t)500 * 1024 * 1024},
+        {std::string(FLAGS_db) + "/vol2", (uint64_t)5 * 1024 * 1024 * 1024},
         {std::string(FLAGS_db) + "/vol3", (uint64_t)300 * 1024 * 1024 * 1024}};
 
     Status s = DB::Open(options, FLAGS_db, &db_);
@@ -858,6 +871,9 @@ class Benchmark {
 
   void ReadRandom(ThreadState* thread) {
     ReadOptions options;
+    if (FLAGS_direct_io) {
+      options.direct_io = true;
+    }
     std::string value;
     int found = 0;
     KeyBuffer key;
@@ -903,18 +919,77 @@ class Benchmark {
   // 读刚刚写下去的部分
   void ReadHot(ThreadState* thread) {
     ReadOptions options;
+    if (FLAGS_direct_io) {
+      options.direct_io = true;
+    }
     std::string value;
     //暂时先读1%吧
     const int range = (FLAGS_num + 99) / 100;
-    const int shifting = FLAGS_num - range;
+    // const int shifting = FLAGS_num - range;
     KeyBuffer key;
     for (int i = 0; i < reads_; i++) {
       // 读最后的1%的数据，如果是顺序插入的话 会读处于上层的数据
-      const int k = (thread->rand.Uniform(range)) + shifting;
+      const int k = (thread->rand.Uniform(range)) + FLAGS_num;
       key.Set(k);
       db_->Get(options, key.slice(), &value);
       thread->stats.FinishedSingleOp();
     }
+  }
+
+  void WriteHot(ThreadState* thread) {
+    // if (num_ != FLAGS_num) {
+    //   char msg[100];
+    //   std::snprintf(msg, sizeof(msg), "(%d ops)", num_);
+    //   thread->stats.AddMessage(msg);
+    // }
+    std::cout << "run Write Hot!!!" << std::endl;
+    RandomGenerator gen;
+    WriteBatch batch;
+    Status s;
+    int64_t bytes = 0;
+    KeyBuffer key;
+    const int range = (FLAGS_num + 99) / 100;
+    for (int i = 0; i < range; i += entries_per_batch_) {
+      batch.Clear();
+      for (int j = 0; j < entries_per_batch_; j++) {
+        const int k = thread->rand.Uniform(range) + FLAGS_num;
+        key.Set(k);
+        batch.Put(key.slice(), gen.Generate(value_size_));
+        bytes += value_size_ + key.slice().size();
+        thread->stats.FinishedSingleOp();
+      }
+      s = db_->Write(write_options_, &batch);
+      if (!s.ok()) {
+        std::fprintf(stderr, "put error: %s\n", s.ToString().c_str());
+        std::exit(1);
+      }
+    }
+    thread->stats.AddBytes(bytes);
+  }
+
+  void Scan(ThreadState* thread) {
+    ReadOptions options;
+    int found = 0;
+    KeyBuffer key;
+    int64_t bytes = 0;
+    for (int i = 0; i < reads_; i++) {
+      Iterator* iter = db_->NewIterator(options);
+      const int k = thread->rand.Uniform(FLAGS_num);
+      key.Set(k);
+      iter->Seek(key.slice());
+      if (iter->Valid() && iter->key() == key.slice()) found++;
+      if (iter->Valid()) {
+        for (int j = 0; j < scanLength_ && iter->Valid(); j++, iter->Next()) {
+          bytes += iter->key().size() + iter->value().size();
+        }
+      }
+      delete iter;
+      thread->stats.FinishedSingleOp();
+    }
+    thread->stats.AddBytes(bytes);
+    char msg[100];
+    snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
+    thread->stats.AddMessage(msg);
   }
 
   void SeekRandom(ThreadState* thread) {
@@ -1072,10 +1147,15 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--reuse_logs=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_reuse_logs = n;
+    } else if (sscanf(argv[i], "--direct_io=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_direct_io = n;
     } else if (sscanf(argv[i], "--num=%d%c", &n, &junk) == 1) {
       FLAGS_num = n;
     } else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {
       FLAGS_reads = n;
+    } else if (sscanf(argv[i], "--scanLength=%d%c", &n, &junk) == 1) {
+      FLAGS_scanLength = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
       FLAGS_threads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {

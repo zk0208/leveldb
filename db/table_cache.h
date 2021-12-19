@@ -47,7 +47,7 @@ class TableCache {
 
  private:
   Status FindTable(uint64_t file_number, uint32_t path_id, uint64_t file_size,
-                   Cache::Handle**);
+                   Cache::Handle**, bool direct_io);
 
   Env* const env_;
   const std::string dbname_;

@@ -1583,7 +1583,8 @@ uint32_t DBImpl::GetPathId(const Options& options, int level) {
           //     level_size * mutable_cf_options.max_bytes_for_level_multiplier
           //     * mutable_cf_options.MaxBytesMultiplerAdditional(cur_level));
           // }
-          level_size = MaxBytesForLevel(&options, level);
+          // level_size = MaxBytesForLevel(&options, level); // 这边写错了 干
+          level_size = MaxBytesForLevel(&options, cur_level + 1);
         }
         cur_level++;
         continue;

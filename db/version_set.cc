@@ -1093,7 +1093,8 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
     const std::vector<FileMetaData*>& files = current_->files_[level];
     for (size_t i = 0; i < files.size(); i++) {
       const FileMetaData* f = files[i];
-      edit.AddFile(level, f->number, f->path_id, f->file_size, f->smallest,
+      // fix the bug in there (修复bug，之前参数传递错误)
+      edit.AddFile(level, f->number, f->file_size, f->path_id, f->smallest,
                    f->largest);
     }
   }

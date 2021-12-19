@@ -12,6 +12,7 @@
 
 #include "leveldb/env.h"
 #include "leveldb/status.h"
+
 #include "port/port.h"
 #include "port/thread_annotations.h"
 #include "util/mutexlock.h"
@@ -242,7 +243,8 @@ class InMemoryEnv : public EnvWrapper {
   }
 
   Status NewRandomAccessFile(const std::string& fname,
-                             RandomAccessFile** result) override {
+                             RandomAccessFile** result,
+                             bool direct_IO_flag = false) override {
     MutexLock lock(&mutex_);
     if (file_map_.find(fname) == file_map_.end()) {
       *result = nullptr;
