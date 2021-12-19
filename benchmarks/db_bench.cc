@@ -68,6 +68,8 @@ static int FLAGS_num = 1000000;
 // Number of read operations to do.  If negative, do FLAGS_num reads.
 static int FLAGS_reads = -1;
 
+static int FLAGS_scanLength = -1;
+
 // Number of concurrent threads to run.
 static int FLAGS_threads = 1;
 
@@ -378,6 +380,7 @@ class Benchmark {
   int value_size_;
   int entries_per_batch_;
   WriteOptions write_options_;
+  int scanLength_;
   int reads_;
   int heap_counter_;
   CountComparator count_comparator_;
@@ -473,6 +476,7 @@ class Benchmark {
         value_size_(FLAGS_value_size),
         entries_per_batch_(1),
         reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
+        scanLength_(FLAGS_scanLength < 0 ? 1000 : FLAGS_scanLength),
         heap_counter_(0),
         count_comparator_(BytewiseComparator()),
         total_thread_count_(0) {
@@ -565,6 +569,9 @@ class Benchmark {
         method = &Benchmark::SeekOrdered;
       } else if (name == Slice("readhot")) {
         method = &Benchmark::ReadHot;
+      } else if (name == Slice("scan")) {
+        method = &Benchmark::Scan;
+        std::cout << "scan length = " << scanLength_ << std::endl;
       } else if (name == Slice("readrandomsmall")) {
         reads_ /= 1000;
         method = &Benchmark::ReadRandom;
@@ -963,6 +970,31 @@ class Benchmark {
     thread->stats.AddBytes(bytes);
   }
 
+  void Scan(ThreadState* thread) {
+    ReadOptions options;
+    int found = 0;
+    KeyBuffer key;
+    int64_t bytes = 0;
+    for (int i = 0; i < reads_; i++) {
+      Iterator* iter = db_->NewIterator(options);
+      const int k = thread->rand.Uniform(FLAGS_num);
+      key.Set(k);
+      iter->Seek(key.slice());
+      if (iter->Valid() && iter->key() == key.slice()) found++;
+      if (iter->Valid()) {
+        for (int j = 0; j < scanLength_ && iter->Valid(); j++, iter->Next()) {
+          bytes += iter->key().size() + iter->value().size();
+        }
+      }
+      delete iter;
+      thread->stats.FinishedSingleOp();
+    }
+    thread->stats.AddBytes(bytes);
+    char msg[100];
+    snprintf(msg, sizeof(msg), "(%d of %d found)", found, num_);
+    thread->stats.AddMessage(msg);
+  }
+
   void SeekRandom(ThreadState* thread) {
     ReadOptions options;
     int found = 0;
@@ -1125,6 +1157,8 @@ int main(int argc, char** argv) {
       FLAGS_num = n;
     } else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {
       FLAGS_reads = n;
+    } else if (sscanf(argv[i], "--scanLength=%d%c", &n, &junk) == 1) {
+      FLAGS_scanLength = n;
     } else if (sscanf(argv[i], "--threads=%d%c", &n, &junk) == 1) {
       FLAGS_threads = n;
     } else if (sscanf(argv[i], "--value_size=%d%c", &n, &junk) == 1) {
