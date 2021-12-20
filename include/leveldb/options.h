@@ -179,6 +179,9 @@ struct LEVELDB_EXPORT Options {
   // opening the DB.
   // Default: empty
   std::vector<DbPath> db_paths;
+
+  // 默认开启compaction
+  bool disable_compaction = false;
 };
 
 // Options that control read operations
