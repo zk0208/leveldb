@@ -124,6 +124,16 @@ void builderTest(std::string db_name, int nums, int filenums) {
 
   time_t sync;
 
+  auto testIter = mem->NewIterator();
+  testIter->SeekToFirst();
+  uint64_t iter_start = options.env->NowMicros();
+  while (testIter->Valid()) {
+    testIter->Next();
+  }
+  uint64_t iter_end = options.env->NowMicros();
+  std::cout << "iter 遍历时间： " << iter_end - iter_start << "micros"
+            << std::endl;
+
   std::cout << "build table 开始时间：" << dt << std::endl;
   uint64_t syncTime = 0;
   uint64_t start = options.env->NowMicros();

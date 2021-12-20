@@ -15,12 +15,12 @@
 #ifndef STORAGE_LEVELDB_DB_VERSION_SET_H_
 #define STORAGE_LEVELDB_DB_VERSION_SET_H_
 
+#include "db/dbformat.h"
+#include "db/version_edit.h"
 #include <map>
 #include <set>
 #include <vector>
 
-#include "db/dbformat.h"
-#include "db/version_edit.h"
 #include "port/port.h"
 #include "port/thread_annotations.h"
 
@@ -251,7 +251,9 @@ class VersionSet {
   // Returns true iff some level needs a compaction.
   bool NeedsCompaction() const {
     Version* v = current_;
-    return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
+    // return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
+    // 关闭seek compaction
+    return (v->compaction_score_ >= 1);
   }
 
   // Add all files listed in any live version to *live.
