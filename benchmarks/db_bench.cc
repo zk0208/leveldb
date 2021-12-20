@@ -787,7 +787,7 @@ class Benchmark {
 
     // 自己的配置
     options.compression = kNoCompression;
-    options.max_open_files = 65535;
+    // options.max_open_files = 65535;
     options.multi_path = true;
     options.db_paths = {
         {std::string(FLAGS_db) + "/vol1", (uint64_t)500 * 1024 * 1024},
