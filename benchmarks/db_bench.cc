@@ -126,6 +126,9 @@ static const char* FLAGS_db = nullptr;
 // Use direct_io in read
 static bool FLAGS_direct_io = false;
 
+// 关闭compaction,为了测试read和scan,默认开启
+static bool FLAGS_disable_compaction = false;
+
 namespace leveldb {
 
 namespace {
@@ -785,6 +788,8 @@ class Benchmark {
     options.filter_policy = filter_policy_;
     options.reuse_logs = FLAGS_reuse_logs;
 
+    // 自己的配置
+    options.disable_compaction = FLAGS_disable_compaction;
     options.compression = kNoCompression;
     Status s = DB::Open(options, FLAGS_db, &db_);
     if (!s.ok()) {
@@ -1145,6 +1150,9 @@ int main(int argc, char** argv) {
     } else if (sscanf(argv[i], "--direct_io=%d%c", &n, &junk) == 1 &&
                (n == 0 || n == 1)) {
       FLAGS_direct_io = n;
+    } else if (sscanf(argv[i], "--disable_compaction=%d%c", &n, &junk) == 1 &&
+               (n == 0 || n == 1)) {
+      FLAGS_disable_compaction = n;
     } else if (sscanf(argv[i], "--num=%d%c", &n, &junk) == 1) {
       FLAGS_num = n;
     } else if (sscanf(argv[i], "--reads=%d%c", &n, &junk) == 1) {

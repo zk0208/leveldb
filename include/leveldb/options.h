@@ -140,6 +140,9 @@ struct LEVELDB_EXPORT Options {
   // Many applications will benefit from passing the result of
   // NewBloomFilterPolicy() here.
   const FilterPolicy* filter_policy = nullptr;
+
+  // 默认开启compaction
+  bool disable_compaction = false;
 };
 
 // Options that control read operations
