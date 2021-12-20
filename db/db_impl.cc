@@ -717,7 +717,9 @@ void DBImpl::RecordBackgroundError(const Status& s) {
 
 void DBImpl::MaybeScheduleCompaction() {
   mutex_.AssertHeld();
-  if (background_compaction_scheduled_) {
+  if (options_.disable_compaction) {
+    // 手动关闭compaction,为了测试read 和 scan
+  } else if (background_compaction_scheduled_) {
     // Already scheduled
   } else if (shutting_down_.load(std::memory_order_acquire)) {
     // DB is being deleted; no more background compactions

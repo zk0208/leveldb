@@ -258,7 +258,9 @@ class VersionSet {
   // Returns true iff some level needs a compaction.
   bool NeedsCompaction() const {
     Version* v = current_;
-    return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
+    // return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);
+    // 关闭 seek compaction
+    return (v->compaction_score_ >= 1);
   }
 
   // Add all files listed in any live version to *live.
