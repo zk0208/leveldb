@@ -4,8 +4,10 @@
 
 #include "table/format.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <sys/time.h>
 
 #include "leveldb/env.h"
 
@@ -84,9 +86,16 @@ Status Footer::DecodeFrom(Slice* input) {
   }
   return result;
 }
+uint64_t NowMicros() {
+  static constexpr uint64_t kUsecondsPerSecond = 1000000;
+  struct ::timeval tv;
+  ::gettimeofday(&tv, nullptr);
+  return static_cast<uint64_t>(tv.tv_sec) * kUsecondsPerSecond + tv.tv_usec;
+}
 
 Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
-                 const BlockHandle& handle, BlockContents* result) {
+                 const BlockHandle& handle, BlockContents* result,
+                 bool dataBlock) {
   result->data = Slice();
   result->cachable = false;
   result->heap_allocated = false;
@@ -96,7 +105,15 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   size_t n = static_cast<size_t>(handle.size());
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;
+  extern uint64_t total_readTime;
+  extern uint64_t total_datablockReadTime;
+  uint64_t time_start = NowMicros();
   Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
+  uint64_t time_end = NowMicros();
+  if (dataBlock) {
+    total_datablockReadTime += time_end - time_start;
+  }
+  total_readTime += time_end - time_start;
   if (!s.ok()) {
     delete[] buf;
     return s;

@@ -105,7 +105,8 @@ struct BlockContents {
 // Read the block identified by "handle" from "file".  On failure
 // return non-OK.  On success fill *result and return OK.
 Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
-                 const BlockHandle& handle, BlockContents* result);
+                 const BlockHandle& handle, BlockContents* result,
+                 bool dataBlock = false);
 
 // Implementation details follow.  Clients should ignore,
 

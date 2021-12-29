@@ -353,6 +353,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       state->last_file_read = f;
       state->last_file_read_level = level;
 
+      // state->vset->table_cache_->Evict(f->number);  // colin 测试
       state->s = state->vset->table_cache_->Get(*state->options, f->number,
                                                 f->meta_file_size, state->ikey,
                                                 &state->saver, SaveValue);
@@ -365,6 +366,8 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
           return true;  // Keep searching in other files
         case kFound:
           state->found = true;
+          extern uint64_t total_found;
+          total_found++;
           return false;
         case kDeleted:
           return false;
@@ -1284,9 +1287,9 @@ Compaction* VersionSet::PickCompaction() {
   // We prefer compactions triggered by too much data in a level over
   // the compactions triggered by seeks.
   const bool size_compaction = (current_->compaction_score_ >= 1);
-  // const bool seek_compaction = (current_->file_to_compact_ != nullptr);
+  const bool seek_compaction = (current_->file_to_compact_ != nullptr);
   // 关闭seek compaction
-  const bool seek_compaction = false;
+  // const bool seek_compaction = false;
   if (size_compaction) {
     level = current_->compaction_level_;
     assert(level >= 0);

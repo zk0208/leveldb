@@ -5,8 +5,8 @@
 #ifndef STORAGE_LEVELDB_UTIL_MUTEXLOCK_H_
 #define STORAGE_LEVELDB_UTIL_MUTEXLOCK_H_
 
-#include <atomic>
-#include <thread>
+// #include <atomic>
+// #include <thread>
 
 #include "port/port.h"
 #include "port/thread_annotations.h"
@@ -37,36 +37,36 @@ class SCOPED_LOCKABLE MutexLock {
   port::Mutex* const mu_;
 };
 
-class SpinMutex {
- public:
-  SpinMutex() : locked_(false) {}
+// class SpinMutex {
+//  public:
+//   SpinMutex() : locked_(false) {}
 
-  bool try_lock() {
-    auto currently_locked = locked_.load(std::memory_order_relaxed);
-    return !currently_locked &&
-           locked_.compare_exchange_weak(currently_locked, true,
-                                         std::memory_order_acquire,
-                                         std::memory_order_relaxed);
-  }
+//   bool try_lock() {
+//     auto currently_locked = locked_.load(std::memory_order_relaxed);
+//     return !currently_locked &&
+//            locked_.compare_exchange_weak(currently_locked, true,
+//                                          std::memory_order_acquire,
+//                                          std::memory_order_relaxed);
+//   }
 
-  void lock() {
-    for (size_t tries = 0;; ++tries) {
-      if (try_lock()) {
-        // success
-        break;
-      }
-      port::AsmVolatilePause();
-      if (tries > 100) {
-        std::this_thread::yield();
-      }
-    }
-  }
+//   void lock() {
+//     for (size_t tries = 0;; ++tries) {
+//       if (try_lock()) {
+//         // success
+//         break;
+//       }
+//       port::AsmVolatilePause();
+//       if (tries > 100) {
+//         std::this_thread::yield();
+//       }
+//     }
+//   }
 
-  void unlock() { locked_.store(false, std::memory_order_release); }
+//   void unlock() { locked_.store(false, std::memory_order_release); }
 
- private:
-  std::atomic<bool> locked_;
-};
+//  private:
+//   std::atomic<bool> locked_;
+// };
 
 }  // namespace leveldb
 

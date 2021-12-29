@@ -5,6 +5,7 @@
 #include "leveldb/table.h"
 
 #include "db/filename.h"
+#include <cstdint>
 
 #include "leveldb/cache.h"
 #include "leveldb/comparator.h"
@@ -19,7 +20,10 @@
 #include "util/coding.h"
 
 namespace leveldb {
-
+uint64_t total_readBlockNum = 0;
+uint64_t total_readTime = 0;
+uint64_t total_datablockReadNum = 0;
+uint64_t total_datablockReadTime = 0;
 struct Table::Rep {
   ~Rep() {
     // for (auto f : files) { //外部维护files的生命周期，这里不需要管理
@@ -84,6 +88,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     opt.verify_checksums = true;
   }
   s = ReadBlock(file, opt, footer.index_handle(), &index_block_contents);
+  total_readBlockNum++;
 
   if (s.ok()) {
     // We've successfully read the footer and the index block: we're
@@ -204,7 +209,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
       } else {
         // s = ReadBlock(table->rep_->file, options, handle, &contents);
         s = ReadBlock(table->rep_->files[handle.fileNumber()], options, handle,
-                      &contents);
+                      &contents, true);
+        total_datablockReadNum++;
+        total_readBlockNum++;
         if (s.ok()) {
           block = new Block(contents);
           if (contents.cachable && options.fill_cache) {
@@ -216,7 +223,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     } else {
       // s = ReadBlock(table->rep_->file, options, handle, &contents);
       s = ReadBlock(table->rep_->files[handle.fileNumber()], options, handle,
-                    &contents);
+                    &contents, true);
+      total_datablockReadNum++;
+      total_readBlockNum++;
       if (s.ok()) {
         block = new Block(contents);
       }

@@ -45,6 +45,12 @@
 
 namespace leveldb {
 
+extern uint64_t total_readBlockNum;
+extern uint64_t total_readTime;
+extern uint64_t total_datablockReadNum;
+extern uint64_t total_datablockReadTime;
+uint64_t total_found = 0;
+
 const int kNumNonTableCacheFiles = 10;
 
 // Information kept for every waiting writer
@@ -1535,6 +1541,23 @@ bool DBImpl::GetProperty(const Slice& property, std::string* value) {
         value->append(buf);
       }
     }
+    std::snprintf(buf, sizeof(buf), "read block num: %ld\n",
+                  total_readBlockNum);
+    value->append(buf);
+
+    std::snprintf(buf, sizeof(buf), "read block time: %ld\n", total_readTime);
+    value->append(buf);
+
+    std::snprintf(buf, sizeof(buf), "read data block num: %ld\n",
+                  total_datablockReadNum);
+    value->append(buf);
+
+    std::snprintf(buf, sizeof(buf), "read data block time: %ld\n",
+                  total_datablockReadTime);
+    value->append(buf);
+
+    std::snprintf(buf, sizeof(buf), "total found: %ld\n", total_found);
+    value->append(buf);
     return true;
   } else if (in == "sstables") {
     *value = versions_->current()->DebugString();
