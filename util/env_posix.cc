@@ -249,6 +249,68 @@ class PosixSequentialFile final : public SequentialFile {
 // Instances of this class are thread-safe, as required by the RandomAccessFile
 // API. Instances are immutable and Read() only calls thread-safe library
 // functions.
+class PosixRandomAccessFile final : public RandomAccessFile {
+ public:
+  // The new instance takes ownership of |fd|. |fd_limiter| must outlive this
+  // instance, and will be used to determine if .
+  PosixRandomAccessFile(std::string filename, int fd, Limiter* fd_limiter)
+      : has_permanent_fd_(fd_limiter->Acquire()),
+        fd_(has_permanent_fd_ ? fd : -1),
+        fd_limiter_(fd_limiter),
+        filename_(std::move(filename)) {
+    if (!has_permanent_fd_) {
+      assert(fd_ == -1);
+      ::close(fd);  // The file will be opened on every read.
+    }
+  }
+
+  ~PosixRandomAccessFile() override {
+    if (has_permanent_fd_) {
+      assert(fd_ != -1);
+      ::close(fd_);
+      fd_limiter_->Release();
+    }
+  }
+
+  Status Read(uint64_t offset, size_t n, Slice* result,
+              char* scratch) const override {
+    int fd = fd_;
+    if (!has_permanent_fd_) {
+      fd = ::open(filename_.c_str(), O_RDONLY | kOpenBaseFlags);
+      if (fd < 0) {
+        return PosixError(filename_, errno);
+      }
+    }
+
+    assert(fd != -1);
+
+    Status status;
+    ssize_t read_size = ::pread(fd, scratch, n, static_cast<off_t>(offset));
+    *result = Slice(scratch, (read_size < 0) ? 0 : read_size);
+    if (read_size < 0) {
+      // An error: return a non-ok status.
+      status = PosixError(filename_, errno);
+    }
+    if (!has_permanent_fd_) {
+      // Close the temporary file descriptor opened earlier.
+      assert(fd != fd_);
+      ::close(fd);
+    }
+    return status;
+  }
+
+ private:
+  const bool has_permanent_fd_;  // If false, the file is opened on every read.
+  const int fd_;                 // -1 if has_permanent_fd_ is false.
+  Limiter* const fd_limiter_;
+  const std::string filename_;
+};
+
+// Implements random read access in a file using pread().
+//
+// Instances of this class are thread-safe, as required by the RandomAccessFile
+// API. Instances are immutable and Read() only calls thread-safe library
+// functions.
 // class PosixRandomAccessFile final : public RandomAccessFile {
 //  public:
 //   // The new instance takes ownership of |fd|. |fd_limiter| must outlive this
@@ -306,158 +368,158 @@ class PosixSequentialFile final : public SequentialFile {
 //   const std::string filename_;
 // };
 
-class PosixRandomAccessFile : public RandomAccessFile {
- private:
-  std::string filename_;
-  bool temporary_fd_;  // If true, fd_ is -1 and we open on every read.
-  int fd_;
-  Limiter* limiter_;
-  bool direct_IO_flag_;
+// class PosixRandomAccessFile : public RandomAccessFile {
+//  private:
+//   std::string filename_;
+//   bool temporary_fd_;  // If true, fd_ is -1 and we open on every read.
+//   int fd_;
+//   Limiter* limiter_;
+//   bool direct_IO_flag_;
 
- public:
-  PosixRandomAccessFile(const std::string& fname, int fd, Limiter* limiter,
-                        bool direct_IO_flag = false)
-      : filename_(fname),
-        fd_(fd),
-        limiter_(limiter),
-        direct_IO_flag_(direct_IO_flag) {
-    temporary_fd_ = !limiter->Acquire();
-    if (temporary_fd_) {
-      // Open file on every access.
-      close(fd_);
-      fd_ = -1;
-    }
-  }
+//  public:
+//   PosixRandomAccessFile(const std::string& fname, int fd, Limiter* limiter,
+//                         bool direct_IO_flag = false)
+//       : filename_(fname),
+//         fd_(fd),
+//         limiter_(limiter),
+//         direct_IO_flag_(direct_IO_flag) {
+//     temporary_fd_ = !limiter->Acquire();
+//     if (temporary_fd_) {
+//       // Open file on every access.
+//       close(fd_);
+//       fd_ = -1;
+//     }
+//   }
 
-  virtual ~PosixRandomAccessFile() {
-    if (!temporary_fd_) {
-      close(fd_);
-      limiter_->Release();
-    }
-  }
+//   virtual ~PosixRandomAccessFile() {
+//     if (!temporary_fd_) {
+//       close(fd_);
+//       limiter_->Release();
+//     }
+//   }
 
-  virtual Status Read(uint64_t offset, size_t n, Slice* result,
-                      char* scratch) const {
-    int fd = fd_;
-    uint64_t start_micros = Env::Default()->NowMicros();
-    AlignedBuffer* abuf = AlignedBuffer::GetAlignedBuffer();
-    // MeasureTime(Statistics::GetStatistics().get(),
-    //             Tickers::GETALIGNEDBUFFER_TIME,
-    //             Env::Default()->NowMicros() - start_micros);
-    if (temporary_fd_) {
-      int o_flag = O_RDONLY;
-      if (direct_IO_flag_) {
-        o_flag = O_RDONLY | O_DIRECT;
-      }
-      fd = open(filename_.c_str(), o_flag);
-      if (fd < 0) {
-        return PosixError(filename_, errno);
-      }
-    }
-    Status s;
-    ssize_t r;
-    if (direct_IO_flag_) {
-      size_t alignment = abuf->alignment_;
-      size_t aligned_offset = TruncateToPageBoundary(alignment, offset);
-      size_t offset_advance = offset - aligned_offset;
-      size_t read_size = Roundup(offset + n, alignment) - aligned_offset;
-      if (read_size > abuf->capacity_) {
-        abuf->AllocateNewBuffer(read_size);
-      }
-      // printf("read_size:%ld , aligned_offset:%ld , buf capacity:%ld
-      // \n",read_size,aligned_offset,abuf_->capacity_);
-      r = pread(fd, abuf->bufstart_, read_size,
-                static_cast<off_t>(aligned_offset));
-      abuf->Read(scratch, offset_advance, n);
-      if (r < 0) {
-        // An error: return a non-ok status
-        s = PosixError(filename_, errno);
-      } else {
-        r = n;
-      }
-    } else {
-      r = pread(fd, scratch, n, static_cast<off_t>(offset));
-      if (r < 0) {
-        // An error: return a non-ok status
-        s = PosixError(filename_, errno);
-      }
-    }
-    *result = Slice(scratch, (r < 0) ? 0 : r);
-    if (temporary_fd_) {
-      // Close the temporary file descriptor opened earlier.
-      close(fd);
-    }
-    start_micros = Env::Default()->NowMicros();
-    AlignedBuffer::UngetAlignedBuffer(abuf);
-    // MeasureTime(Statistics::GetStatistics().get(),
-    //             Tickers::UNGETALIGNEDBUFFER_TIME,
-    //             Env::Default()->NowMicros() - start_micros);
-    return s;
-  }
-  virtual Status Reads(uint64_t offset, size_t n, Slice results[],
-                       char* scratch[], size_t lens[], int num) const {
-    int fd = fd_;
-    if (temporary_fd_) {
-      int o_flag = O_RDONLY;
-      if (direct_IO_flag_) {
-        o_flag = O_RDONLY | O_DIRECT;
-      }
-      fd = open(filename_.c_str(), o_flag);
-      if (fd < 0) {
-        return PosixError(filename_, errno);
-      }
-    }
+//   virtual Status Read(uint64_t offset, size_t n, Slice* result,
+//                       char* scratch) const {
+//     int fd = fd_;
+//     uint64_t start_micros = Env::Default()->NowMicros();
+//     AlignedBuffer* abuf = AlignedBuffer::GetAlignedBuffer();
+//     // MeasureTime(Statistics::GetStatistics().get(),
+//     //             Tickers::GETALIGNEDBUFFER_TIME,
+//     //             Env::Default()->NowMicros() - start_micros);
+//     if (temporary_fd_) {
+//       int o_flag = O_RDONLY;
+//       if (direct_IO_flag_) {
+//         o_flag = O_RDONLY | O_DIRECT;
+//       }
+//       fd = open(filename_.c_str(), o_flag);
+//       if (fd < 0) {
+//         return PosixError(filename_, errno);
+//       }
+//     }
+//     Status s;
+//     ssize_t r;
+//     if (direct_IO_flag_) {
+//       size_t alignment = abuf->alignment_;
+//       size_t aligned_offset = TruncateToPageBoundary(alignment, offset);
+//       size_t offset_advance = offset - aligned_offset;
+//       size_t read_size = Roundup(offset + n, alignment) - aligned_offset;
+//       if (read_size > abuf->capacity_) {
+//         abuf->AllocateNewBuffer(read_size);
+//       }
+//       // printf("read_size:%ld , aligned_offset:%ld , buf capacity:%ld
+//       // \n",read_size,aligned_offset,abuf_->capacity_);
+//       r = pread(fd, abuf->bufstart_, read_size,
+//                 static_cast<off_t>(aligned_offset));
+//       abuf->Read(scratch, offset_advance, n);
+//       if (r < 0) {
+//         // An error: return a non-ok status
+//         s = PosixError(filename_, errno);
+//       } else {
+//         r = n;
+//       }
+//     } else {
+//       r = pread(fd, scratch, n, static_cast<off_t>(offset));
+//       if (r < 0) {
+//         // An error: return a non-ok status
+//         s = PosixError(filename_, errno);
+//       }
+//     }
+//     *result = Slice(scratch, (r < 0) ? 0 : r);
+//     if (temporary_fd_) {
+//       // Close the temporary file descriptor opened earlier.
+//       close(fd);
+//     }
+//     start_micros = Env::Default()->NowMicros();
+//     AlignedBuffer::UngetAlignedBuffer(abuf);
+//     // MeasureTime(Statistics::GetStatistics().get(),
+//     //             Tickers::UNGETALIGNEDBUFFER_TIME,
+//     //             Env::Default()->NowMicros() - start_micros);
+//     return s;
+//   }
+//   virtual Status Reads(uint64_t offset, size_t n, Slice results[],
+//                        char* scratch[], size_t lens[], int num) const {
+//     int fd = fd_;
+//     if (temporary_fd_) {
+//       int o_flag = O_RDONLY;
+//       if (direct_IO_flag_) {
+//         o_flag = O_RDONLY | O_DIRECT;
+//       }
+//       fd = open(filename_.c_str(), o_flag);
+//       if (fd < 0) {
+//         return PosixError(filename_, errno);
+//       }
+//     }
 
-    Status s;
-    ssize_t r;
-    if (direct_IO_flag_) {
-      AlignedBuffer* abuf = AlignedBuffer::GetAlignedBuffer();
-      size_t alignment = abuf->alignment_;
-      size_t aligned_offset = TruncateToPageBoundary(alignment, offset);
-      size_t offset_advance = offset - aligned_offset;
-      size_t read_size = Roundup(offset + n, alignment) - aligned_offset;
-      if (read_size > abuf->capacity_) {
-        abuf->AllocateNewBuffer(read_size);
-      }
-      // printf("read_size:%ld , aligned_offset:%ld , buf capacity:%ld
-      // \n",read_size,aligned_offset,abuf_->capacity_);
-      r = pread(fd, abuf->bufstart_, read_size,
-                static_cast<off_t>(aligned_offset));
-      if (r < 0) {
-        // An error: return a non-ok status
-        s = PosixError(filename_, errno);
-      } else {
-        for (int i = 0; i < num; i++) {
-          abuf->Read(scratch[i], offset_advance, lens[i]);
-          offset_advance += lens[i];
-          results[i] = Slice(scratch[i], lens[i]);
-        }
-      }
-      AlignedBuffer::UngetAlignedBuffer(abuf);
-    } else {
-      int i;
-      static struct iovec iov[8];
-      for (i = 0; i < num; ++i) {
-        iov[i].iov_base = scratch[i];
-        iov[i].iov_len = lens[i];
-      }
-      r = preadv(fd, iov, num, static_cast<off_t>(offset));
-      for (i = 0; i < num; ++i) {
-        if (r < 0) {
-          // An error: return a non-ok status
-          s = PosixError(filename_, errno);
-          break;
-        }
-        results[i] = Slice(scratch[i], lens[i]);
-      }
-    }
-    if (temporary_fd_) {
-      // Close the temporary file descriptor opened earlier.
-      close(fd);
-    }
-    return s;
-  }
-};
+//     Status s;
+//     ssize_t r;
+//     if (direct_IO_flag_) {
+//       AlignedBuffer* abuf = AlignedBuffer::GetAlignedBuffer();
+//       size_t alignment = abuf->alignment_;
+//       size_t aligned_offset = TruncateToPageBoundary(alignment, offset);
+//       size_t offset_advance = offset - aligned_offset;
+//       size_t read_size = Roundup(offset + n, alignment) - aligned_offset;
+//       if (read_size > abuf->capacity_) {
+//         abuf->AllocateNewBuffer(read_size);
+//       }
+//       // printf("read_size:%ld , aligned_offset:%ld , buf capacity:%ld
+//       // \n",read_size,aligned_offset,abuf_->capacity_);
+//       r = pread(fd, abuf->bufstart_, read_size,
+//                 static_cast<off_t>(aligned_offset));
+//       if (r < 0) {
+//         // An error: return a non-ok status
+//         s = PosixError(filename_, errno);
+//       } else {
+//         for (int i = 0; i < num; i++) {
+//           abuf->Read(scratch[i], offset_advance, lens[i]);
+//           offset_advance += lens[i];
+//           results[i] = Slice(scratch[i], lens[i]);
+//         }
+//       }
+//       AlignedBuffer::UngetAlignedBuffer(abuf);
+//     } else {
+//       int i;
+//       static struct iovec iov[8];
+//       for (i = 0; i < num; ++i) {
+//         iov[i].iov_base = scratch[i];
+//         iov[i].iov_len = lens[i];
+//       }
+//       r = preadv(fd, iov, num, static_cast<off_t>(offset));
+//       for (i = 0; i < num; ++i) {
+//         if (r < 0) {
+//           // An error: return a non-ok status
+//           s = PosixError(filename_, errno);
+//           break;
+//         }
+//         results[i] = Slice(scratch[i], lens[i]);
+//       }
+//     }
+//     if (temporary_fd_) {
+//       // Close the temporary file descriptor opened earlier.
+//       close(fd);
+//     }
+//     return s;
+//   }
+// };
 
 // Implements random read access in a file using mmap().
 //
@@ -818,48 +880,85 @@ class PosixEnv : public Env {
   //   return status;
   // }
 
+  // Status NewRandomAccessFile(const std::string& filename,
+  //                            RandomAccessFile** result,
+  //                            bool direct_IO_flag_) override {
+  //   *result = nullptr;
+  //   Status s;
+  //   int fd;
+  //   if (direct_IO_flag_) {
+  //     fd = ::open(filename.c_str(), O_RDONLY | O_DIRECT | kOpenBaseFlags);
+  //   } else {
+  //     fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
+  //   }
+  //   if (fd < 0) {
+  //     return PosixError(filename, errno);
+  //   }
+  //   if (direct_IO_flag_) {
+  //     *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_, true);
+  //     return Status::OK();
+  //   }
+
+  //   if (!mmap_limiter_.Acquire()) {
+  //     *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
+  //     return Status::OK();
+  //   }
+
+  //   uint64_t file_size;
+  //   Status status = GetFileSize(filename, &file_size);
+  //   if (status.ok()) {
+  //     void* mmap_base =
+  //         ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+  //     if (mmap_base != MAP_FAILED) {
+  //       *result = new PosixMmapReadableFile(filename,
+  //                                           reinterpret_cast<char*>(mmap_base),
+  //                                           file_size, &mmap_limiter_);
+  //     } else {
+  //       status = PosixError(filename, errno);
+  //     }
+  //   }
+  //   ::close(fd);
+  //   if (!status.ok()) {
+  //     mmap_limiter_.Release();
+  //   }
+  //   return status;
+  // }
+
   Status NewRandomAccessFile(const std::string& filename,
                              RandomAccessFile** result,
                              bool direct_IO_flag_) override {
     *result = nullptr;
-    Status s;
-    int fd;
-    if (direct_IO_flag_) {
-      fd = ::open(filename.c_str(), O_RDONLY | O_DIRECT | kOpenBaseFlags);
-    } else {
-      fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
-    }
+    int fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
     if (fd < 0) {
       return PosixError(filename, errno);
     }
-    if (direct_IO_flag_) {
-      *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_, true);
-      return Status::OK();
-    }
 
-    if (!mmap_limiter_.Acquire()) {
-      *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
-      return Status::OK();
-    }
+    *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
+    return Status::OK();
 
-    uint64_t file_size;
-    Status status = GetFileSize(filename, &file_size);
-    if (status.ok()) {
-      void* mmap_base =
-          ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
-      if (mmap_base != MAP_FAILED) {
-        *result = new PosixMmapReadableFile(filename,
-                                            reinterpret_cast<char*>(mmap_base),
-                                            file_size, &mmap_limiter_);
-      } else {
-        status = PosixError(filename, errno);
-      }
-    }
-    ::close(fd);
-    if (!status.ok()) {
-      mmap_limiter_.Release();
-    }
-    return status;
+    // if (!mmap_limiter_.Acquire()) {
+    //   *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
+    //   return Status::OK();
+    // }
+
+    // uint64_t file_size;
+    // Status status = GetFileSize(filename, &file_size);
+    // if (status.ok()) {
+    //   void* mmap_base =
+    //       ::mmap(/*addr=*/nullptr, file_size, PROT_READ, MAP_SHARED, fd, 0);
+    //   if (mmap_base != MAP_FAILED) {
+    //     *result = new PosixMmapReadableFile(filename,
+    //                                         reinterpret_cast<char*>(mmap_base),
+    //                                         file_size, &mmap_limiter_);
+    //   } else {
+    //     status = PosixError(filename, errno);
+    //   }
+    // }
+    // ::close(fd);
+    // if (!status.ok()) {
+    //   mmap_limiter_.Release();
+    // }
+    // return status;
   }
 
   Status NewWritableFile(const std::string& filename,
