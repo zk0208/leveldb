@@ -1,4 +1,7 @@
 #!/bin/bash
+# 需要使用大页占据多余内存,使得总可用内存为16G 使用命令 "sysctl vm.nr_hugepages=43008" 大页默认为2MB
+# blockcache设置为8GB
+# 关闭 compaction
 ulimit -n 65535
 workDirs=("/home/colin/hub/testDir/vol1" "/home/colin/hub/testDir/vol2" "/home/colin/hub/testDir/vol3")
 workDevs=("/dev/sdb1" "/dev/sdc1" "/dev/sdd1")
@@ -237,7 +240,7 @@ do
     sudo du -h /root/testDir >> ${resultFile}
     free -h >> ${resultFile}
     iostat -mx 1 3600 /dev/vdb > ${ioFile} &
-    /root/leveldb/build/db_bench --benchmarks="stats,sstables,readrandom,stats,sstables" --db="/root/testDir" --threads=40 --use_existing_db=1 --reads=262144 --num=104857600 --value_size=1000 --write_buffer_size=67108864 --max_file_size=67108864 >> ${resultFile} #2>&1
+    /root/leveldb/build/db_bench --benchmarks="stats,sstables,readrandom,stats,sstables" --db="/root/testDir" --cache_size=8589934592  --disable_compaction=1 --threads=40 --use_existing_db=1 --reads=262144 --num=104857600 --value_size=1000 --write_buffer_size=67108864 --max_file_size=67108864 >> ${resultFile} #2>&1
     pidof iostat | xargs kill -9
     free -h >> ${resultFile}
 
@@ -268,7 +271,7 @@ do
     sudo du -h /root/testDir >> ${resultFile}
     free -h >> ${resultFile}
     iostat -mx 1 3600 /dev/sdb /dev/sdc /dev/sdd /dev/md0 > ${ioFile} &
-    /root/leveldb/build/db_bench --benchmarks="stats,sstables,scan,stats,sstables" --db="/root/testDir" --threads=40 --use_existing_db=1 --reads=524 --num=104857600 --value_size=1000 --write_buffer_size=67108864 --max_file_size=67108864 >> ${resultFile} #2>&1
+    /root/leveldb/build/db_bench --benchmarks="stats,sstables,scan,stats,sstables" --db="/root/testDir" --cache_size=8589934592  --disable_compaction=1 --threads=40 --use_existing_db=1 --reads=524 --num=104857600 --value_size=1000 --write_buffer_size=67108864 --max_file_size=67108864 >> ${resultFile} #2>&1
     pidof iostat | xargs kill -9
     free -h >> ${resultFile}
     echo "du -h  : " >> ${resultFile}
