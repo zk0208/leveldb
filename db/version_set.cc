@@ -4,6 +4,7 @@
 
 #include "db/version_set.h"
 
+#include <bits/stdint-uintn.h>
 #include <stdio.h>
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include <sys/types.h>
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
 #include "table/merger.h"
@@ -51,7 +53,7 @@ static double MaxBytesForLevel(const Options* options, int level) {
   }
   return result;
 }
-
+//每一层单个文件最大值，2MB，可以改变不同层的文件大小来改变文件数目
 static uint64_t MaxFileSizeForLevel(const Options* options, int level) {
   // We could vary per level to reduce number of files?
   return TargetFileSize(options);
@@ -364,6 +366,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
       num_files = tmp.size();
     } else {
       // Binary search to find earliest index whose largest key >= ikey.
+      // 有序、二分查找第一个最大的Internalkey比要查找的大的sst
       uint32_t index = FindFile(vset_->icmp_, files_[level], ikey);
       if (index >= num_files) {
         files = nullptr;
@@ -615,8 +618,26 @@ class VersionSet::Builder {
   LevelState levels_[config::kNumLevels];
 
  public:
+  bool have_log_number_;
+  bool have_prev_log_number_;
+  bool have_last_sequence_;
+  bool have_oldest_log_number_;
+  uint64_t log_number_;
+  uint64_t prev_log_number_;
+  uint64_t oldest_log_number_;
+  uint64_t last_sequence_;
   // Initialize a builder with the files from *base and other info from *vset
-  Builder(VersionSet* vset, Version* base) : vset_(vset), base_(base) {
+  Builder(VersionSet* vset, Version* base) 
+  : vset_(vset), 
+    base_(base),
+    have_log_number_(false),
+    have_prev_log_number_(false),
+    have_oldest_log_number_(false),
+    have_last_sequence_(false),
+    log_number_(0),
+    prev_log_number_(0),
+    oldest_log_number_(0),
+    last_sequence_(0)  {
     base_->Ref();
     BySmallestKey cmp;
     cmp.internal_comparator = &vset_->icmp_;
@@ -648,6 +669,22 @@ class VersionSet::Builder {
 
   // Apply all of the edits in *edit to the current state.
   void Apply(VersionEdit* edit) {
+    if (edit->has_log_number_) {
+      log_number_ = edit->log_number_;
+      have_log_number_ = true;
+    }
+    if (edit->has_prev_log_number_) {
+      prev_log_number_ = edit->prev_log_number_;
+      have_prev_log_number_ = true;
+    }
+    if (edit->has_oldest_log_number_) {
+      oldest_log_number_ = edit->oldest_log_number_;
+      have_oldest_log_number_ = true;
+    }
+    if (edit->has_last_sequence_) {
+      last_sequence_ = edit->last_sequence_;
+      have_last_sequence_ = true;
+    }
     // Update compaction pointers
     for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
       const int level = edit->compact_pointers_[i].first;
@@ -756,29 +793,36 @@ class VersionSet::Builder {
 
 VersionSet::VersionSet(const std::string& dbname, const Options* options,
                        TableCache* table_cache,
-                       const InternalKeyComparator* cmp)
+                       const InternalKeyComparator* cmp, const uint32_t id)
     : env_(options->env),
       dbname_(dbname),
       options_(options),
       table_cache_(table_cache),
       icmp_(*cmp),
-      next_file_number_(2),
-      manifest_file_number_(0),  // Filled by Recover()
+      // next_file_number_(2),
+      // manifest_file_number_(0),  // Filled by Recover()
       last_sequence_(0),
       log_number_(0),
       prev_log_number_(0),
-      descriptor_file_(nullptr),
-      descriptor_log_(nullptr),
+      oldest_log_number(0),
+      id_(id),
+      // descriptor_file_(nullptr),
+      // descriptor_log_(nullptr),
       dummy_versions_(this),
       current_(nullptr) {
   AppendVersion(new Version(this));
 }
+std::atomic_uint64_t VersionSet::next_file_number_(2);
+uint64_t VersionSet::manifest_file_number_ = 0;
+port::Mutex* VersionSet::mutex_ = nullptr;
+WritableFile* VersionSet::descriptor_file_ = nullptr;
+log::Writer* VersionSet::descriptor_log_ = nullptr;
 
 VersionSet::~VersionSet() {
   current_->Unref();
   assert(dummy_versions_.next_ == &dummy_versions_);  // List must be empty
-  delete descriptor_log_;
-  delete descriptor_file_;
+  // delete descriptor_log_;
+  // delete descriptor_file_;
 }
 
 void VersionSet::AppendVersion(Version* v) {
@@ -799,6 +843,7 @@ void VersionSet::AppendVersion(Version* v) {
 }
 
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
+  edit->setSingleTreeID(id_);
   if (edit->has_log_number_) {
     assert(edit->log_number_ >= log_number_);
     assert(edit->log_number_ < next_file_number_);
@@ -820,7 +865,6 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     builder.SaveTo(v);
   }
   Finalize(v);
-
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
   std::string new_manifest_file;
@@ -837,24 +881,25 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
       s = WriteSnapshot(descriptor_log_);
     }
   }
-
   // Unlock during expensive MANIFEST log write
   {
     mu->Unlock();
 
     // Write new record to MANIFEST log
+    //多个tree需要互斥写入manifest文件
     if (s.ok()) {
       std::string record;
       edit->EncodeTo(&record);
+      mutex_->Lock();
       s = descriptor_log_->AddRecord(record);
       if (s.ok()) {
         s = descriptor_file_->Sync();
       }
+      mutex_->Unlock();
       if (!s.ok()) {
-        Log(options_->info_log, "MANIFEST write: %s\n", s.ToString().c_str());
+        Log(options_->info_log, "SingleTree %u MANIFEST write: %s\n", id_, s.ToString().c_str());
       }
     }
-
     // If we just created a new descriptor file, install it by writing a
     // new CURRENT file that points to it.
     if (s.ok() && !new_manifest_file.empty()) {
@@ -882,8 +927,42 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
 
   return s;
 }
+Status VersionSet::WriteSnapshot(log::Writer* log) {
+  // TODO: Break up into multiple records to reduce memory usage on recovery?
 
-Status VersionSet::Recover(bool* save_manifest) {
+  // Save metadata
+  VersionEdit edit;
+  edit.setSingleTreeID(id_);
+  edit.SetLastSequence(last_sequence_);
+  edit.SetLogNumber(log_number_);
+  edit.SetNextFile(next_file_number_);
+  edit.SetComparatorName(icmp_.user_comparator()->Name());
+
+  // Save compaction pointers
+  for (int level = 0; level < config::kNumLevels; level++) {
+    if (!compact_pointer_[level].empty()) {
+      InternalKey key;
+      key.DecodeFrom(compact_pointer_[level]);
+      edit.SetCompactPointer(level, key);
+    }
+  }
+
+  // Save files
+  for (int level = 0; level < config::kNumLevels; level++) {
+    const std::vector<FileMetaData*>& files = current_->files_[level];
+    for (size_t i = 0; i < files.size(); i++) {
+      const FileMetaData* f = files[i];
+      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+    }
+  }
+
+  std::string record;
+  edit.EncodeTo(&record);
+  return log->AddRecord(record);
+}
+
+//恢复各个tree的版本信息
+Status VersionSet::Recover(bool* save_manifest, std::vector<VersionSet*>& version_sets) {
   struct LogReporter : public log::Reader::Reporter {
     Status* status;
     virtual void Corruption(size_t bytes, const Status& s) {
@@ -893,7 +972,7 @@ Status VersionSet::Recover(bool* save_manifest) {
 
   // Read "CURRENT" file, which contains a pointer to the current manifest file
   std::string current;
-  Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
+  Status s = ReadFileToString(version_sets[0]->env_, CurrentFileName(version_sets[0]->dbname_), &current);
   if (!s.ok()) {
     return s;
   }
@@ -902,9 +981,9 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
   current.resize(current.size() - 1);
 
-  std::string dscname = dbname_ + "/" + current;
+  std::string dscname = version_sets[0]->dbname_ + "/" + current;
   SequentialFile* file;
-  s = env_->NewSequentialFile(dscname, &file);
+  s = version_sets[0]->env_->NewSequentialFile(dscname, &file);
   if (!s.ok()) {
     if (s.IsNotFound()) {
       return Status::Corruption("CURRENT points to a non-existent file",
@@ -913,16 +992,14 @@ Status VersionSet::Recover(bool* save_manifest) {
     return s;
   }
 
-  bool have_log_number = false;
-  bool have_prev_log_number = false;
   bool have_next_file = false;
-  bool have_last_sequence = false;
   uint64_t next_file = 0;
-  uint64_t last_sequence = 0;
-  uint64_t log_number = 0;
-  uint64_t prev_log_number = 0;
-  Builder builder(this, current_);
 
+  // Builder builder(this, current_);
+  std::vector<Builder*> builders(version_sets.size());
+  for (uint32_t i = 0; i < builders.size(); i++) {
+    builders[i] = new Builder(version_sets[i],version_sets[i]->current());
+  }
   {
     LogReporter reporter;
     reporter.status = &s;
@@ -935,36 +1012,21 @@ Status VersionSet::Recover(bool* save_manifest) {
       s = edit.DecodeFrom(record);
       if (s.ok()) {
         if (edit.has_comparator_ &&
-            edit.comparator_ != icmp_.user_comparator()->Name()) {
+            edit.comparator_ != version_sets[edit.single_tree_id_]->icmp_.user_comparator()->Name()) {
           s = Status::InvalidArgument(
               edit.comparator_ + " does not match existing comparator ",
-              icmp_.user_comparator()->Name());
+              version_sets[edit.single_tree_id_]->icmp_.user_comparator()->Name());
         }
       }
 
       if (s.ok()) {
-        builder.Apply(&edit);
+        builders[edit.single_tree_id_]->Apply(&edit);
       }
-
-      if (edit.has_log_number_) {
-        log_number = edit.log_number_;
-        have_log_number = true;
-      }
-
-      if (edit.has_prev_log_number_) {
-        prev_log_number = edit.prev_log_number_;
-        have_prev_log_number = true;
-      }
-
       if (edit.has_next_file_number_) {
         next_file = edit.next_file_number_;
         have_next_file = true;
       }
-
-      if (edit.has_last_sequence_) {
-        last_sequence = edit.last_sequence_;
-        have_last_sequence = true;
-      }
+    
     }
   }
   delete file;
@@ -973,43 +1035,56 @@ Status VersionSet::Recover(bool* save_manifest) {
   if (s.ok()) {
     if (!have_next_file) {
       s = Status::Corruption("no meta-nextfile entry in descriptor");
-    } else if (!have_log_number) {
-      s = Status::Corruption("no meta-lognumber entry in descriptor");
-    } else if (!have_last_sequence) {
-      s = Status::Corruption("no last-sequence-number entry in descriptor");
     }
-
-    if (!have_prev_log_number) {
-      prev_log_number = 0;
-    }
-
-    MarkFileNumberUsed(prev_log_number);
-    MarkFileNumberUsed(log_number);
   }
 
   if (s.ok()) {
-    Version* v = new Version(this);
-    builder.SaveTo(v);
-    // Install recovered version
-    Finalize(v);
-    AppendVersion(v);
+    for (size_t i = 0; i < builders.size(); i++) {
+      Builder* builder = builders[i];
+      if (!builder->have_log_number_) {
+        s = Status::Corruption("no meta-lognumber entry in descriptor");
+      } else if (!builder->have_last_sequence_) {
+        s = Status::Corruption("no last-sequence-number entry in descriptor");
+      }
+
+      if (!builder->have_prev_log_number_) {
+        builder->prev_log_number_ = 0;
+      }
+
+      version_sets[i]->MarkFileNumberUsed(builder->oldest_log_number_);
+      version_sets[i]->MarkFileNumberUsed(builder->prev_log_number_);
+      version_sets[i]->MarkFileNumberUsed(builder->log_number_);
+
+      if (s.ok()) {
+        Version* v = new Version(version_sets[i]);
+        builder->SaveTo(v);
+        // Install recovered version
+        version_sets[i]->Finalize(v);
+        version_sets[i]->AppendVersion(v);
+
+        version_sets[i]->last_sequence_ = builder->last_sequence_;
+        version_sets[i]->log_number_ = builder->log_number_;
+        version_sets[i]->prev_log_number_ = builder->prev_log_number_;
+        version_sets[i]->oldest_log_number = builder->oldest_log_number_;
+      }
+    }
+    
     manifest_file_number_ = next_file;
     next_file_number_ = next_file + 1;
-    last_sequence_ = last_sequence;
-    log_number_ = log_number;
-    prev_log_number_ = prev_log_number;
 
     // See if we can reuse the existing MANIFEST file.
-    if (ReuseManifest(dscname, current)) {
+    if (version_sets[0]->ReuseManifest(dscname, current)) {
       // No need to save new manifest
     } else {
       *save_manifest = true;
     }
   }
-
+  for (uint32_t i = 0; i < builders.size(); i++) delete builders[i];
+  
   return s;
 }
 
+//判断是否重用manifest文件，默认是生成新的，有reuse选项再判断状态确定是否重用
 bool VersionSet::ReuseManifest(const std::string& dscname,
                                const std::string& dscbase) {
   if (!options_->reuse_logs) {
@@ -1083,36 +1158,6 @@ void VersionSet::Finalize(Version* v) {
 
   v->compaction_level_ = best_level;
   v->compaction_score_ = best_score;
-}
-
-Status VersionSet::WriteSnapshot(log::Writer* log) {
-  // TODO: Break up into multiple records to reduce memory usage on recovery?
-
-  // Save metadata
-  VersionEdit edit;
-  edit.SetComparatorName(icmp_.user_comparator()->Name());
-
-  // Save compaction pointers
-  for (int level = 0; level < config::kNumLevels; level++) {
-    if (!compact_pointer_[level].empty()) {
-      InternalKey key;
-      key.DecodeFrom(compact_pointer_[level]);
-      edit.SetCompactPointer(level, key);
-    }
-  }
-
-  // Save files
-  for (int level = 0; level < config::kNumLevels; level++) {
-    const std::vector<FileMetaData*>& files = current_->files_[level];
-    for (size_t i = 0; i < files.size(); i++) {
-      const FileMetaData* f = files[i];
-      edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
-    }
-  }
-
-  std::string record;
-  edit.EncodeTo(&record);
-  return log->AddRecord(record);
 }
 
 int VersionSet::NumLevelFiles(int level) const {
@@ -1266,7 +1311,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   delete[] list;
   return result;
 }
-
+//选择合适的文件用于合并，需要compaction的层数与得分、以及因为seek需要合并的sst都由其他函数设置好了
 Compaction* VersionSet::PickCompaction() {
   Compaction* c;
   int level;
@@ -1282,6 +1327,7 @@ Compaction* VersionSet::PickCompaction() {
     c = new Compaction(options_, level);
 
     // Pick the first file that comes after compact_pointer_[level]
+    //选择紧跟在 compact_pointer_[level] 之后的第一个文件
     for (size_t i = 0; i < current_->files_[level].size(); i++) {
       FileMetaData* f = current_->files_[level][i];
       if (compact_pointer_[level].empty() ||
@@ -1290,6 +1336,7 @@ Compaction* VersionSet::PickCompaction() {
         break;
       }
     }
+    //不存在就插入第一个文件
     if (c->inputs_[0].empty()) {
       // Wrap-around to the beginning of the key space
       c->inputs_[0].push_back(current_->files_[level][0]);
@@ -1315,7 +1362,7 @@ Compaction* VersionSet::PickCompaction() {
     current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
     assert(!c->inputs_[0].empty());
   }
-
+  //只有当前层文件，还要再选择下一层文件
   SetupOtherInputs(c);
 
   return c;
@@ -1399,7 +1446,7 @@ void AddBoundaryInputs(const InternalKeyComparator& icmp,
     }
   }
 }
-
+//查找level+1层文件，然后保持level+1层文件不变下，选择level层有重叠文件加入
 void VersionSet::SetupOtherInputs(Compaction* c) {
   const int level = c->level();
   InternalKey smallest, largest;
@@ -1433,7 +1480,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
                                      &expanded1);
       if (expanded1.size() == c->inputs_[1].size()) {
         Log(options_->info_log,
-            "Expanding@%d %d+%d (%ld+%ld bytes) to %d+%d (%ld+%ld bytes)\n",
+            "SingleTree %u, Expanding@%d %d+%d (%ld+%ld bytes) to %d+%d (%ld+%ld bytes)\n",GetID(),
             level, int(c->inputs_[0].size()), int(c->inputs_[1].size()),
             long(inputs0_size), long(inputs1_size), int(expanded0.size()),
             int(expanded1.size()), long(expanded0_size), long(inputs1_size));

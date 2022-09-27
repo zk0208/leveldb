@@ -18,7 +18,10 @@
 #include "db/dbformat.h"
 #include "db/memtable.h"
 #include "db/write_batch_internal.h"
+#include <bits/stdint-uintn.h>
 #include "leveldb/db.h"
+#include "leveldb/slice.h"
+#include "leveldb/status.h"
 #include "util/coding.h"
 
 namespace leveldb {
@@ -93,6 +96,44 @@ SequenceNumber WriteBatchInternal::Sequence(const WriteBatch* b) {
 
 void WriteBatchInternal::SetSequence(WriteBatch* b, SequenceNumber seq) {
   EncodeFixed64(&b->rep_[0], seq);
+}
+
+Status WriteBatch::GetKey(const int& index, Slice* key, Slice* value, ValueType* type){
+  Slice input(rep_);
+  if (input.size() < kHeader) {
+    return Status::Corruption("malformed WriteBatch (too small)");
+  }
+  if (index >= WriteBatchInternal::Count(this)) {
+    return Status::Corruption("WriteBatch access violation");
+  }
+  input.remove_prefix(kHeader);
+  int found = 0;
+  while (!input.empty() && found <= index) {
+    found++;
+    char tag = input[0];
+    input.remove_prefix(1);
+    switch (tag) {
+      case kTypeValue:
+        if (GetLengthPrefixedSlice(&input, key) &&
+            GetLengthPrefixedSlice(&input, value)) {
+              *type = kTypeValue;
+        } else {
+          return Status::Corruption("bad WriteBatch Put");
+        }
+        break;
+      case kTypeDeletion:
+        if (GetLengthPrefixedSlice(&input, key)) {
+          *type = kTypeDeletion;
+          value = nullptr;
+        } else {
+          return Status::Corruption("bad WriteBatch Delete");
+        }
+        break;
+      default:
+        return Status::Corruption("unknown WriteBatch tag");
+    }
+  }
+  return Status::OK();
 }
 
 void WriteBatch::Put(const Slice& key, const Slice& value) {

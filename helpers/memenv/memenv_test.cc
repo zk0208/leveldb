@@ -242,7 +242,7 @@ TEST(MemEnvTest, DBTest) {
   ASSERT_TRUE(!iterator->Valid());
   delete iterator;
 
-  DBImpl* dbi = reinterpret_cast<DBImpl*>(db);
+  SingleTree* dbi = reinterpret_cast<SingleTree*>(db);
   ASSERT_OK(dbi->TEST_CompactMemTable());
 
   for (size_t i = 0; i < 3; ++i) {

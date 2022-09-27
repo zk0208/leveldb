@@ -5,6 +5,7 @@
 #ifndef STORAGE_LEVELDB_DB_VERSION_EDIT_H_
 #define STORAGE_LEVELDB_DB_VERSION_EDIT_H_
 
+#include <bits/stdint-uintn.h>
 #include <set>
 #include <utility>
 #include <vector>
@@ -45,6 +46,10 @@ class VersionEdit {
     has_prev_log_number_ = true;
     prev_log_number_ = num;
   }
+  void SetOldestLogNumber(uint64_t num) {
+    has_oldest_log_number_ = true;
+    oldest_log_number_= num;
+  }
   void SetNextFile(uint64_t num) {
     has_next_file_number_ = true;
     next_file_number_ = num;
@@ -52,6 +57,10 @@ class VersionEdit {
   void SetLastSequence(SequenceNumber seq) {
     has_last_sequence_ = true;
     last_sequence_ = seq;
+  }
+  void setSingleTreeID(uint64_t id) {
+    has_single_tree_id_ = true;
+    single_tree_id_ = id;
   }
   void SetCompactPointer(int level, const InternalKey& key) {
     compact_pointers_.push_back(std::make_pair(level, key));
@@ -88,13 +97,17 @@ class VersionEdit {
   std::string comparator_;
   uint64_t log_number_;
   uint64_t prev_log_number_;
-  uint64_t next_file_number_;
+  uint64_t oldest_log_number_;
+  uint64_t next_file_number_; //暂时是多个singletree公用一个文件编号，不是单独编号
+  uint64_t single_tree_id_;
   SequenceNumber last_sequence_;
   bool has_comparator_;
   bool has_log_number_;
   bool has_prev_log_number_;
+  bool has_oldest_log_number_;
   bool has_next_file_number_;
   bool has_last_sequence_;
+  bool has_single_tree_id_;
 
   std::vector<std::pair<int, InternalKey> > compact_pointers_;
   DeletedFileSet deleted_files_;

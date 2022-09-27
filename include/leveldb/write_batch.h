@@ -21,6 +21,8 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_WRITE_BATCH_H_
 #define STORAGE_LEVELDB_INCLUDE_WRITE_BATCH_H_
 
+#include "db/dbformat.h"
+#include <bits/stdint-uintn.h>
 #include <string>
 
 #include "leveldb/export.h"
@@ -46,6 +48,9 @@ class LEVELDB_EXPORT WriteBatch {
   WriteBatch& operator=(const WriteBatch&) = default;
 
   ~WriteBatch();
+
+  //batch中应该内容均属于一个Tree，但是没有记录，所以写一个解析batch中key的函数
+  Status GetKey(const int& index, Slice * key, Slice* value, ValueType* type);
 
   // Store the mapping "key->value" in the database.
   void Put(const Slice& key, const Slice& value);

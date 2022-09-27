@@ -13,6 +13,7 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_ENV_H_
 #define STORAGE_LEVELDB_INCLUDE_ENV_H_
 
+#include <bits/stdint-uintn.h>
 #include <stdarg.h>
 #include <stdint.h>
 
@@ -166,7 +167,7 @@ class LEVELDB_EXPORT Env {
   // added to the same Env may run concurrently in different threads.
   // I.e., the caller may not assume that background work items are
   // serialized.
-  virtual void Schedule(void (*function)(void* arg), void* arg) = 0;
+  virtual void Schedule(void (*function)(void* arg), void* arg, uint32_t id = 0) = 0;
 
   // Start a new thread, invoking "function(arg)" within the new thread.
   // When "function(arg)" returns, the thread will be destroyed.
@@ -352,8 +353,8 @@ class LEVELDB_EXPORT EnvWrapper : public Env {
     return target_->LockFile(f, l);
   }
   Status UnlockFile(FileLock* l) override { return target_->UnlockFile(l); }
-  void Schedule(void (*f)(void*), void* a) override {
-    return target_->Schedule(f, a);
+  void Schedule(void (*f)(void*), void* a, uint32_t id = 0) override {
+    return target_->Schedule(f, a, id);
   }
   void StartThread(void (*f)(void*), void* a) override {
     return target_->StartThread(f, a);

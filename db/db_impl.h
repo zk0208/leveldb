@@ -6,6 +6,7 @@
 #define STORAGE_LEVELDB_DB_DB_IMPL_H_
 
 #include <atomic>
+#include <bits/stdint-uintn.h>
 #include <deque>
 #include <set>
 #include <string>
@@ -19,31 +20,28 @@
 #include "port/thread_annotations.h"
 
 namespace leveldb {
-
+class DBImpl;
 class MemTable;
 class TableCache;
 class Version;
 class VersionEdit;
 class VersionSet;
 
-class DBImpl : public DB {
+class SingleTree{
  public:
-  DBImpl(const Options& options, const std::string& dbname);
+  SingleTree(DBImpl * db, uint32_t id);
 
-  DBImpl(const DBImpl&) = delete;
-  DBImpl& operator=(const DBImpl&) = delete;
+  SingleTree(const SingleTree&) = delete;
+  SingleTree& operator=(const SingleTree&) = delete;
 
-  virtual ~DBImpl();
+  virtual ~SingleTree();
 
-  // Implementations of the DB interface
-  virtual Status Put(const WriteOptions&, const Slice& key, const Slice& value);
-  virtual Status Delete(const WriteOptions&, const Slice& key);
+  //单棵树的读写接口，写时先写入db的log，然后再写入mem
   virtual Status Write(const WriteOptions& options, WriteBatch* updates);
   virtual Status Get(const ReadOptions& options, const Slice& key,
                      std::string* value);
-  virtual Iterator* NewIterator(const ReadOptions&);
-  virtual const Snapshot* GetSnapshot();
-  virtual void ReleaseSnapshot(const Snapshot* snapshot);
+  //virtual Iterator* NewIterator(const ReadOptions&);
+
   virtual bool GetProperty(const Slice& property, std::string* value);
   virtual void GetApproximateSizes(const Range* range, int n, uint64_t* sizes);
   virtual void CompactRange(const Slice* begin, const Slice* end);
@@ -56,11 +54,6 @@ class DBImpl : public DB {
   // Force current memtable contents to be compacted.
   Status TEST_CompactMemTable();
 
-  // Return an internal iterator over the current state of the database.
-  // The keys of this iterator are internal keys (see format.h).
-  // The returned iterator should be deleted when no longer needed.
-  Iterator* TEST_NewInternalIterator();
-
   // Return the maximum overlapping data (in bytes) at next level for any
   // file at a level >= 1.
   int64_t TEST_MaxNextLevelOverlappingBytes();
@@ -71,7 +64,9 @@ class DBImpl : public DB {
   void RecordReadSample(Slice key);
 
  private:
-  friend class DB;
+  friend DB;
+  friend DBImpl;
+  friend VersionSet;
   struct CompactionState;
   struct Writer;
 
@@ -104,27 +99,11 @@ class DBImpl : public DB {
                                 SequenceNumber* latest_snapshot,
                                 uint32_t* seed);
 
-  Status NewDB();
-
-  // Recover the descriptor from persistent storage.  May do a significant
-  // amount of work to recover recently logged updates.  Any changes to
-  // be made to the descriptor are added to *edit.
-  Status Recover(VersionEdit* edit, bool* save_manifest)
-      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
-  void MaybeIgnoreError(Status* s) const;
-
-  // Delete any unneeded files and stale in-memory entries.
-  void DeleteObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Compact the in-memory write buffer to disk.  Switches to a new
   // log-file/memtable and writes a new descriptor iff successful.
   // Errors are recorded in bg_error_.
   void CompactMemTable() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
-  Status RecoverLogFile(uint64_t log_number, bool last_log, bool* save_manifest,
-                        VersionEdit* edit, SequenceNumber* max_sequence)
-      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   Status WriteLevel0Table(MemTable* mem, VersionEdit* edit, Version* base)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
@@ -150,9 +129,116 @@ class DBImpl : public DB {
   Status InstallCompactionResults(CompactionState* compact)
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
+
+  DBImpl * db_;
+  uint32_t id_;
+
   const Comparator* user_comparator() const {
     return internal_comparator_.user_comparator();
   }
+  // Constant after construction
+  const InternalKeyComparator internal_comparator_;
+  const InternalFilterPolicy internal_filter_policy_;
+
+  // State below is protected by mutex_
+  port::Mutex mutex_;
+
+  // Has a background compaction been scheduled or is running?
+  bool background_compaction_scheduled_ GUARDED_BY(mutex_);
+  port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);
+  MemTable* mem_;
+  MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
+  std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
+  // WritableFile* logfile_;
+  // uint64_t logfile_number_ GUARDED_BY(mutex_);
+  // log::Writer* log_;
+  uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
+
+  // Queue of writers.
+  std::deque<Writer*> writers_ GUARDED_BY(mutex_);
+  WriteBatch* tmp_batch_ GUARDED_BY(mutex_);
+
+
+  // Set of table files to protect from deletion because they are
+  // part of ongoing compactions.
+  std::set<uint64_t> pending_outputs_ GUARDED_BY(mutex_);
+
+  // Have we encountered a background error in paranoid mode?
+  Status bg_error_ GUARDED_BY(mutex_);
+  ManualCompaction* manual_compaction_ GUARDED_BY(mutex_);
+
+  VersionSet* const versions_;
+
+  CompactionStats stats_[config::kNumLevels] GUARDED_BY(mutex_);
+};
+
+class DBImpl : public DB{
+   public:
+  DBImpl(const Options& options, const std::string& dbname);
+
+  DBImpl(const DBImpl&) = delete;
+  DBImpl& operator=(const DBImpl&) = delete;
+
+  virtual ~DBImpl();
+
+  // Implementations of the DB interface
+  virtual Status Put(const WriteOptions&, const Slice& key, const Slice& value);
+  virtual Status Delete(const WriteOptions&, const Slice& key);
+  virtual Status Write(const WriteOptions& options, WriteBatch* updates);
+  virtual Status Get(const ReadOptions& options, const Slice& key,
+                     std::string* value);
+  virtual Iterator* NewIterator(const ReadOptions&);
+  virtual const Snapshot* GetSnapshot();
+  virtual void ReleaseSnapshot(const Snapshot* snapshot);
+  virtual bool GetProperty(const Slice& property, std::string* value);
+  virtual void GetApproximateSizes(const Range* range, int n, uint64_t* sizes);
+  virtual void CompactRange(const Slice* begin, const Slice* end);
+
+  // Extra methods (for testing) that are not in the public DB interface
+
+
+  // Return an internal iterator over the current state of the database.
+  // The keys of this iterator are internal keys (see format.h).
+  // The returned iterator should be deleted when no longer needed.
+  Iterator* TEST_NewInternalIterator();
+
+  // Record a sample of bytes read at the specified internal key.
+  // Samples are taken approximately once every config::kReadBytesPeriod
+  // bytes.
+  void RecordReadSample(Slice key);
+
+ private:
+  friend DB;
+  friend SingleTree;
+  friend class VersionSet;
+  struct CompactionState;
+  struct Writer;
+
+  Iterator* NewInternalIterator(const ReadOptions&,
+                                SequenceNumber* latest_snapshot,
+                                uint32_t* seed);
+
+  Status NewDB();
+
+  // Recover the descriptor from persistent storage.  May do a significant
+  // amount of work to recover recently logged updates.  Any changes to
+  // be made to the descriptor are added to *edit.
+  Status Recover(VersionEdit* edit, bool* save_manifest)
+      EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  void MaybeIgnoreError(Status* s) const;
+
+  // Delete any unneeded files and stale in-memory entries.
+  void DeleteObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  Status RecoverLogFile(uint64_t log_number, bool last_log, bool* save_manifest,
+                    VersionEdit* edit, SequenceNumber* max_sequence)
+  EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  
+  const Comparator* user_comparator() const {
+    return internal_comparator_.user_comparator();
+  }
+
 
   // Constant after construction
   Env* const env_;
@@ -162,6 +248,7 @@ class DBImpl : public DB {
   const bool owns_info_log_;
   const bool owns_cache_;
   const std::string dbname_;
+  
 
   // table_cache_ provides its own synchronization
   TableCache* const table_cache_;
@@ -172,36 +259,22 @@ class DBImpl : public DB {
   // State below is protected by mutex_
   port::Mutex mutex_;
   std::atomic<bool> shutting_down_;
-  port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);
-  MemTable* mem_;
-  MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
-  std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
+  //log 相关，共用log，需要互斥访问
   WritableFile* logfile_;
+  std::deque<uint64_t> all_logfile_num GUARDED_BY(mutex_);
   uint64_t logfile_number_ GUARDED_BY(mutex_);
   log::Writer* log_;
-  uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
+  //uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
 
   // Queue of writers.
-  std::deque<Writer*> writers_ GUARDED_BY(mutex_);
-  WriteBatch* tmp_batch_ GUARDED_BY(mutex_);
-
+  // std::deque<Writer*> writers_ GUARDED_BY(mutex_);
+  // WriteBatch* tmp_batch_ GUARDED_BY(mutex_);
+  
   SnapshotList snapshots_ GUARDED_BY(mutex_);
 
-  // Set of table files to protect from deletion because they are
-  // part of ongoing compactions.
-  std::set<uint64_t> pending_outputs_ GUARDED_BY(mutex_);
+  //下面就是包含的多个数目
+  std::vector<SingleTree *> singleTrees_;
 
-  // Has a background compaction been scheduled or is running?
-  bool background_compaction_scheduled_ GUARDED_BY(mutex_);
-
-  ManualCompaction* manual_compaction_ GUARDED_BY(mutex_);
-
-  VersionSet* const versions_;
-
-  // Have we encountered a background error in paranoid mode?
-  Status bg_error_ GUARDED_BY(mutex_);
-
-  CompactionStats stats_[config::kNumLevels] GUARDED_BY(mutex_);
 };
 
 // Sanitize db options.  The caller should delete result.info_log if
