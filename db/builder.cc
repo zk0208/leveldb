@@ -8,9 +8,11 @@
 #include "db/filename.h"
 #include "db/table_cache.h"
 #include "db/version_edit.h"
+#include <cstdio>
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/iterator.h"
+#include "leveldb/options.h"
 
 namespace leveldb {
 
@@ -56,7 +58,9 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
 
     if (s.ok()) {
       // Verify that the table is usable
-      Iterator* it = table_cache->NewIterator(ReadOptions(), meta->number,
+      ReadOptions read_option;
+      read_option.read_dir = dbname;
+      Iterator* it = table_cache->NewIterator(read_option, meta->number,
                                               meta->file_size);
       s = it->status();
       delete it;

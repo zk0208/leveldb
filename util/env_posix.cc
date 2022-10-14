@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#include "db/dbformat.h"
-#include <bits/stdint-uintn.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -29,6 +27,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "db/dbformat.h"
 #include "leveldb/env.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"

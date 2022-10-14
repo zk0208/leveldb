@@ -6,7 +6,7 @@
 #define STORAGE_LEVELDB_DB_DB_IMPL_H_
 
 #include <atomic>
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <deque>
 #include <set>
 #include <string>
@@ -38,7 +38,7 @@ class SingleTree{
 
   //单棵树的读写接口，写时先写入db的log，然后再写入mem
   virtual Status Write(const WriteOptions& options, WriteBatch* updates);
-  virtual Status Get(const ReadOptions& options, const Slice& key,
+  virtual Status Get(ReadOptions& options, const Slice& key,
                      std::string* value);
   //virtual Iterator* NewIterator(const ReadOptions&);
 
@@ -114,6 +114,9 @@ class SingleTree{
       EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   void RecordBackgroundError(const Status& s);
+
+  // Delete any unneeded files and stale in-memory entries.
+  void DeleteObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   void MaybeScheduleCompaction() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   static void BGWork(void* db);
@@ -229,7 +232,8 @@ class DBImpl : public DB{
   void MaybeIgnoreError(Status* s) const;
 
   // Delete any unneeded files and stale in-memory entries.
-  void DeleteObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  //void DeleteObsoleteFiles() EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  void DeleteObsoleteFiles();
 
   Status RecoverLogFile(uint64_t log_number, bool last_log, bool* save_manifest,
                     VersionEdit* edit, SequenceNumber* max_sequence)
@@ -261,6 +265,7 @@ class DBImpl : public DB{
   std::atomic<bool> shutting_down_;
   //log 相关，共用log，需要互斥访问
   WritableFile* logfile_;
+  std::string log_dir;
   std::deque<uint64_t> all_logfile_num GUARDED_BY(mutex_);
   uint64_t logfile_number_ GUARDED_BY(mutex_);
   log::Writer* log_;

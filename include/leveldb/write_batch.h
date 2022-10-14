@@ -22,7 +22,7 @@
 #define STORAGE_LEVELDB_INCLUDE_WRITE_BATCH_H_
 
 #include "db/dbformat.h"
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <string>
 
 #include "leveldb/export.h"

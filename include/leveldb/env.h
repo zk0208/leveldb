@@ -13,9 +13,8 @@
 #ifndef STORAGE_LEVELDB_INCLUDE_ENV_H_
 #define STORAGE_LEVELDB_INCLUDE_ENV_H_
 
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <stdarg.h>
-#include <stdint.h>
 
 #include <string>
 #include <vector>

@@ -16,9 +16,10 @@
 #define STORAGE_LEVELDB_DB_VERSION_SET_H_
 
 #include <atomic>
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "db/dbformat.h"
@@ -310,6 +311,7 @@ class VersionSet {
 
   Env* const env_;
   const std::string dbname_;
+  const std::string sub_treedir_;
   const Options* const options_;
   TableCache* const table_cache_;
   const InternalKeyComparator icmp_;

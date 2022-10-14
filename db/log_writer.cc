@@ -4,6 +4,7 @@
 
 #include "db/log_writer.h"
 
+#include <cstdio>
 #include <stdint.h>
 
 #include "leveldb/env.h"

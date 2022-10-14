@@ -18,11 +18,12 @@
 #include "db/dbformat.h"
 #include "db/memtable.h"
 #include "db/write_batch_internal.h"
-#include <bits/stdint-uintn.h>
 #include "leveldb/db.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
 #include "util/coding.h"
+
+#include <cstdint>
 
 namespace leveldb {
 

@@ -6,14 +6,13 @@
 
 #include "db/snapshot.h"
 #include "db/version_edit.h"
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <cassert>
 #include <cstddef>
-#include <stdint.h>
-#include <stdio.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <set>
 #include <string>
 #include <vector>
@@ -31,9 +30,11 @@
 #include "leveldb/db.h"
 #include "leveldb/env.h"
 #include "leveldb/iterator.h"
+#include "leveldb/options.h"
 #include "leveldb/status.h"
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
+#include "leveldb/write_batch.h"
 #include "port/port.h"
 #include "table/block.h"
 #include "table/merger.h"
@@ -125,7 +126,7 @@ SingleTree::~SingleTree(){
 }
 
 //**** SingleTree read/write interface
-Status SingleTree::Get(const ReadOptions& options, const Slice& key,
+Status SingleTree::Get(ReadOptions& options, const Slice& key,
                    std::string* value) {
   Status s;
   MutexLock l(&mutex_);
@@ -157,6 +158,7 @@ Status SingleTree::Get(const ReadOptions& options, const Slice& key,
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
     } else {
+      options.read_dir = db_->dbname_ + "/vol" + std::to_string(id_+1);
       s = current->Get(options, lkey, value, &stats);
       have_stat_update = true;
     }
@@ -164,7 +166,7 @@ Status SingleTree::Get(const ReadOptions& options, const Slice& key,
   }
 
   if (have_stat_update && current->UpdateStats(stats)) {
-    MaybeScheduleCompaction();
+    //MaybeScheduleCompaction();
   }
   mem->Unref();
   if (imm != nullptr) imm->Unref();
@@ -339,7 +341,7 @@ Status SingleTree::MakeRoomForWrite(bool force) {
       assert(versions_->PrevLogNumber() == 0);  //没有imm意味着之前的log文件已经是删除掉了
       uint64_t new_log_number = versions_->NewFileNumber();
       WritableFile* lfile = nullptr;
-      s = db_->env_->NewWritableFile(LogFileName(db_->dbname_, new_log_number), &lfile);
+      s = db_->env_->NewWritableFile(LogFileName(db_->log_dir, new_log_number), &lfile);
       if (!s.ok()) {
         // Avoid chewing through file number space in a tight loop.
         versions_->ReuseFileNumber(new_log_number);
@@ -466,7 +468,8 @@ Status SingleTree::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
-    s = BuildTable(db_->dbname_, db_->env_, db_->options_, db_->table_cache_, iter, &meta);
+    std::string sub_filedir = db_->dbname_ + "/vol" + std::to_string(id_+1);
+    s = BuildTable(sub_filedir, db_->env_, db_->options_, db_->table_cache_, iter, &meta);
     mutex_.Lock();
   }
 
@@ -483,6 +486,7 @@ Status SingleTree::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
+      //printf("pick l0\n");
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
@@ -516,7 +520,10 @@ void SingleTree::CompactMemTable() {
     edit.SetPrevLogNumber(0);
     //遍历log链表，找到最旧的数下一个
     //edit.SetOldestLogNumber(db_->all_logfile_num)
+    db_->mutex_.Lock();
+    edit.SetOldestLogNumber(db_->logfile_number_);
     edit.SetLogNumber(db_->logfile_number_);  // Earlier logs no longer needed
+    db_->mutex_.Unlock();
     s = versions_->LogAndApply(&edit, &mutex_);
   }
 
@@ -525,9 +532,10 @@ void SingleTree::CompactMemTable() {
     imm_->Unref();
     imm_ = nullptr;
     has_imm_.store(false, std::memory_order_release);
-    db_->mutex_.Lock();
+    DeleteObsoleteFiles();
+    //db_->mutex_.Lock();
     db_->DeleteObsoleteFiles();
-    db_->mutex_.Unlock();
+    //db_->mutex_.Unlock();
   } else {
     RecordBackgroundError(s);
   }
@@ -553,6 +561,54 @@ void SingleTree::RecordBackgroundError(const Status& s) {
   if (bg_error_.ok()) {
     bg_error_ = s;
     background_work_finished_signal_.SignalAll();
+  }
+}
+
+void SingleTree::DeleteObsoleteFiles() {
+  mutex_.AssertHeld();
+
+  // Make a set of all of the live files  
+  //保存所有singletree中仍然存活的文件
+  std::set<uint64_t> live;
+  
+  live.insert(pending_outputs_.begin(), pending_outputs_.end());
+  versions_->AddLiveFiles(&live);
+    
+  std::vector<std::string> filenames;
+  std::string sub_filedir = db_->dbname_ + "/vol" + std::to_string(id_+1);
+  db_->env_->GetChildren(sub_filedir, &filenames);  // Ignoring errors on purpose
+  uint64_t number;
+  FileType type;
+  for (size_t i = 0; i < filenames.size(); i++) {
+    if (ParseFileName(filenames[i], &number, &type)) {
+      bool keep = true;
+      switch (type) {
+        case kTableFile:
+          keep = (live.find(number) != live.end());
+          break;
+        case kTempFile:
+          // Any temp files that are currently being written to must
+          // be recorded in pending_outputs_, which is inserted into "live"
+          keep = (live.find(number) != live.end());
+          break;
+        case kDescriptorFile:
+        case kLogFile:
+        case kCurrentFile:
+        case kDBLockFile:
+        case kInfoLogFile:
+          keep = true;
+          break;
+      }
+
+      if (!keep) {
+        if (type == kTableFile) {
+          db_->table_cache_->Evict(number);
+        }
+        Log(db_->options_.info_log, "SingleTree %u, Delete type=%d #%lld\n",id_, static_cast<int>(type),
+            static_cast<unsigned long long>(number));
+        db_->env_->DeleteFile(sub_filedir + "/" + filenames[i]);
+      }
+    }
   }
 }
 
@@ -621,6 +677,7 @@ void SingleTree::BackgroundCompaction() {
         (m->end ? m->end->DebugString().c_str() : "(end)"),
         (m->done ? "(end)" : manual_end.DebugString().c_str()));
   } else {
+    //printf("pickcompact\n");
     c = versions_->PickCompaction();
   }
 
@@ -651,9 +708,10 @@ void SingleTree::BackgroundCompaction() {
     }
     CleanupCompaction(compact);
     c->ReleaseInputs();
-    db_->mutex_.Lock();
+    DeleteObsoleteFiles();
+    //db_->mutex_.Lock();
     db_->DeleteObsoleteFiles();
-    db_->mutex_.Unlock();
+    //db_->mutex_.Unlock();
   }
   delete c;
 
@@ -714,7 +772,8 @@ Status SingleTree::OpenCompactionOutputFile(CompactionState* compact) {
   }
 
   // Make the output file
-  std::string fname = TableFileName(db_->dbname_, file_number);
+  std::string sub_filedir = db_->dbname_ + "/vol" + std::to_string(id_+1);
+  std::string fname = TableFileName(sub_filedir, file_number);
   Status s = db_->env_->NewWritableFile(fname, &compact->outfile);
   if (s.ok()) {
     compact->builder = new TableBuilder(db_->options_, compact->outfile);
@@ -757,8 +816,10 @@ Status SingleTree::FinishCompactionOutputFile(CompactionState* compact,
 
   if (s.ok() && current_entries > 0) {
     // Verify that the table is usable
+    ReadOptions read_option;
+    read_option.read_dir = db_->dbname_ + "/vol" + std::to_string(id_+1);
     Iterator* iter =
-        db_->table_cache_->NewIterator(ReadOptions(), output_number, current_bytes);
+        db_->table_cache_->NewIterator(read_option, output_number, current_bytes);
     s = iter->status();
     delete iter;
     if (s.ok()) {
@@ -801,11 +862,13 @@ Status SingleTree::DoCompactionWork(CompactionState* compact) {
   assert(versions_->NumLevelFiles(compact->compaction->level()) > 0);
   assert(compact->builder == nullptr);
   assert(compact->outfile == nullptr);
+  db_->mutex_.Lock();
   if (db_->snapshots_.empty()) {
     compact->smallest_snapshot = versions_->LastSequence();
   } else {
     compact->smallest_snapshot = db_->snapshots_.oldest()->sequence_number();
   }
+  db_->mutex_.Unlock();
 
   // Release mutex while we're actually doing the compaction work
   mutex_.Unlock();
@@ -1128,12 +1191,20 @@ DBImpl::~DBImpl() {
   shutting_down_.store(true, std::memory_order_release);
   mutex_.Unlock();
 
+  for (auto singletree : singleTrees_) {
+    delete singletree;
+  }
+
   if (db_lock_ != nullptr) {
     env_->UnlockFile(db_lock_);
   }
 
   delete log_;
   delete logfile_;
+  delete VersionSet::descriptor_file_;
+  delete VersionSet::descriptor_log_;
+  VersionSet::descriptor_file_ =nullptr;
+  VersionSet::descriptor_log_ = nullptr;
   delete table_cache_;
 
   if (owns_info_log_) {
@@ -1189,8 +1260,8 @@ Status DBImpl::NewDB() {
 Status DBImpl::Get(const ReadOptions &options, const Slice &key,
                    std::string *value) {
   uint32_t Tree_id = GetSingleTreeID(key.data(), key.size()) % config::kNumSingleTrees;
-
-  Status s = singleTrees_[Tree_id]->Get(options, key, value);
+  ReadOptions readoptions = options;
+  Status s = singleTrees_[Tree_id]->Get(readoptions, key, value);
   return s;
 }
 
@@ -1214,13 +1285,18 @@ Status DBImpl::Delete(const WriteOptions &options, const Slice &key) {
 Status DBImpl::Write(const WriteOptions &options, WriteBatch *update) {
   int batch_num = WriteBatchInternal::Count(update);
   Status s;
+  WriteBatch single_update[config::kNumSingleTrees];
   for (int i = 0; i < batch_num; i++) {
     Slice key, value;
     ValueType type;
     //取得record记录的writebatch之后先判断属于哪一个Tree，然后插入到相应的mem中
     s = update->GetKey(0, &key, &value, &type);
     MaybeIgnoreError(&s);
-    s = Put(options, key, value);
+    uint32_t Tree_id = GetSingleTreeID(key.data(), key.size()) % config::kNumSingleTrees;
+    single_update[Tree_id].Put(key, value);
+  }
+  for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
+    s = singleTrees_[i]->Write(options, &single_update[i]);
     if (!s.ok()) {
       break;
     }
@@ -1346,7 +1422,8 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   mutex_.AssertHeld();
 
   // Open the log file
-  std::string fname = LogFileName(dbname_, log_number);
+  std::string fname = LogFileName(log_dir, log_number);
+  
   SequentialFile* file;
   Status status = env_->NewSequentialFile(fname, &file);
   if (!status.ok()) {
@@ -1408,7 +1485,9 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
     if (mem[Tree_id]->ApproximateMemoryUsage() > options_.write_buffer_size) {
       compactions++;
       *save_manifest = true;
+      singleTrees_[Tree_id]->mutex_.Lock();
       status = singleTrees_[Tree_id]->WriteLevel0Table(mem[Tree_id], &edit[Tree_id], nullptr);
+      singleTrees_[Tree_id]->mutex_.Unlock();
       mem[Tree_id]->Unref();
       mem[Tree_id] = nullptr;
       if (!status.ok()) {
@@ -1452,7 +1531,9 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
       // all mem did not get reused; compact it.
       if (status.ok()) {
         *save_manifest = true;
+        singleTrees_[i]->mutex_.Lock();
         status = singleTrees_[i]->WriteLevel0Table(mem[i], &edit[i], nullptr);
+        singleTrees_[i]->mutex_.Unlock();
       }
       mem[i]->Unref();
     }
@@ -1467,6 +1548,15 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
   env_->CreateDir(dbname_);
+  for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
+    env_->CreateDir(dbname_ + "/vol" + std::to_string(i+1));
+  }
+  if (options_.depart_log) {
+    env_->CreateDir(dbname_ + "/" + options_.log_dir);
+    log_dir = dbname_ + "/" + options_.log_dir;
+  } else {
+    log_dir = dbname_;
+  }
   assert(db_lock_ == nullptr);
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
   if (!s.ok()) {
@@ -1531,11 +1621,27 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   
   std::vector<std::string> filenames;
   s = env_->GetChildren(dbname_, &filenames);
+  std::vector<std::string> tmpFilenames;
+  for (int i = 0; i < config::kNumSingleTrees; i++) {
+    s = env_->GetChildren(dbname_ + "/vol" + std::to_string(i+1), &tmpFilenames);
+    if (!s.ok()) {
+      return s;
+    }
+    for (const std::string tmpFilename : tmpFilenames) {
+      filenames.push_back(tmpFilename);
+    }
+  }
+  if (options_.depart_log) {
+    s = env_->GetChildren(dbname_ + "/" + options_.log_dir, &tmpFilenames);
+    for (const std::string tmpFilename : tmpFilenames) {
+      filenames.push_back(tmpFilename);
+    }
+  }
   if (!s.ok()) {
     return s;
   }
-  
- // versions_->AddLiveFiles(&expected);
+
+  // versions_->AddLiveFiles(&expected);
   uint64_t number;
   FileType type;
   std::vector<uint64_t> logs;
@@ -1586,34 +1692,41 @@ void DBImpl::MaybeIgnoreError(Status* s) const {
   }
 }
 void DBImpl::DeleteObsoleteFiles() {
-  mutex_.AssertHeld();
-  for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
-    if (!singleTrees_[i]->bg_error_.ok()) {
-      return;
-    }
-  }
+  //mutex_.AssertHeld();
+  //关于后台错误是否停止回收，获取锁，暂时不知道该怎么办
+  // for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
+  //   if (!singleTrees_[i]->bg_error_.ok()) {
+  //     return;
+  //   }
+  // }
   // if (!bg_error_.ok()) {
   //   // After a background error, we don't know whether a new version may
   //   // or may not have been committed, so we cannot safely garbage collect.
   //   return;
   // }
 
-  // Make a set of all of the live files
-  //保存所有singletree中仍然存活的文件
-  std::set<uint64_t> live;
+  // Make a set of all of the live files  
   uint64_t min_log_num = singleTrees_[0]->versions_->OldestLogNumber();
   std::vector<uint64_t> prev_logs;
   for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
-    live.insert(singleTrees_[i]->pending_outputs_.begin(), singleTrees_[i]->pending_outputs_.end());
-    singleTrees_[i]->versions_->AddLiveFiles(&live);
     if (min_log_num > singleTrees_[i]->versions_->OldestLogNumber()) {
       min_log_num = singleTrees_[i]->versions_->OldestLogNumber();
     }
     prev_logs.push_back(singleTrees_[i]->versions_->PrevLogNumber());
   }
 
+ // printf("min lognum : %lu\n",min_log_num);
+
   std::vector<std::string> filenames;
   env_->GetChildren(dbname_, &filenames);  // Ignoring errors on purpose
+  if (options_.depart_log) {
+    std::vector<std::string> tmpFilenames;
+    env_->GetChildren(dbname_ + "/" + options_.log_dir, &tmpFilenames);
+    for (const std::string tmpFilename : tmpFilenames) {
+      filenames.push_back(tmpFilename);
+    }
+  }
+ 
   uint64_t number;
   FileType type;
   for (size_t i = 0; i < filenames.size(); i++) {
@@ -1630,13 +1743,7 @@ void DBImpl::DeleteObsoleteFiles() {
           keep = (number >= singleTrees_[0]->versions_->ManifestFileNumber());
           break;
         case kTableFile:
-          keep = (live.find(number) != live.end());
-          break;
         case kTempFile:
-          // Any temp files that are currently being written to must
-          // be recorded in pending_outputs_, which is inserted into "live"
-          keep = (live.find(number) != live.end());
-          break;
         case kCurrentFile:
         case kDBLockFile:
         case kInfoLogFile:
@@ -1645,12 +1752,17 @@ void DBImpl::DeleteObsoleteFiles() {
       }
 
       if (!keep) {
-        if (type == kTableFile) {
-          table_cache_->Evict(number);
-        }
         Log(options_.info_log, "Delete type=%d #%lld\n", static_cast<int>(type),
             static_cast<unsigned long long>(number));
-        env_->DeleteFile(dbname_ + "/" + filenames[i]);
+        if (type == kLogFile) {
+          if (options_.depart_log) {
+            env_->DeleteFile(dbname_ + "/" + options_.log_dir + "/" + filenames[i]);
+          } else {
+            env_->DeleteFile(dbname_ + "/" + filenames[i]);
+          }
+        } else {
+           env_->DeleteFile(dbname_ + "/" + filenames[i]);
+        }  
       }
     }
   }
@@ -1663,7 +1775,6 @@ DB::~DB() {}
 
 Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   *dbptr = nullptr;
-
   DBImpl* impl = new DBImpl(options, dbname);
   impl->mutex_.Lock();
   VersionEdit edit[config::kNumSingleTrees]; //版本初始化
@@ -1682,7 +1793,7 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
     if (flag == false) {
       uint64_t new_log_number = impl->singleTrees_[0]->versions_->NewFileNumber();
       WritableFile* lfile;
-      s = impl->options_.env->NewWritableFile(LogFileName(dbname, new_log_number), &lfile);
+      s = impl->options_.env->NewWritableFile(LogFileName(impl->log_dir, new_log_number), &lfile);
       if (s.ok()) {
         impl->logfile_ = lfile;
         impl->logfile_number_ = new_log_number;
@@ -1701,6 +1812,9 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
     std::vector<VersionSet *> version_sets;
     for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
       version_sets.push_back(impl->singleTrees_[i]->versions_);
+    }
+    s = VersionSet::InitManifest(options.env, dbname, version_sets);
+    for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
       edit[i].SetPrevLogNumber(0);
       edit[i].SetLogNumber(impl->logfile_number_);
       edit[i].SetOldestLogNumber(impl->logfile_number_);
@@ -1710,7 +1824,9 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
   if (s.ok()) {
     impl->DeleteObsoleteFiles();
     for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
+      impl->singleTrees_[i]->mutex_.Lock();
       impl->singleTrees_[i]->MaybeScheduleCompaction();
+      impl->singleTrees_[i]->mutex_.Unlock();
     }
     //impl->MaybeScheduleCompaction();
   }
@@ -1748,6 +1864,36 @@ Status DestroyDB(const std::string& dbname, const Options& options) {
           result = del;
         }
       }
+    }
+    for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
+      std::string sub_filedir;
+      std::vector<std::string> sub_filenames;
+      sub_filedir = dbname + "/vol" + std::to_string(i+1);
+      result = env->GetChildren(sub_filedir, &sub_filenames);
+      for (size_t i = 0; i < sub_filenames.size(); i++) {
+        if (ParseFileName(sub_filenames[i], &number, &type)) {
+          Status del = env->DeleteFile(sub_filedir + "/" + sub_filenames[i]);
+          if (result.ok() && !del.ok()) {
+            result = del;
+          }
+        }
+      }
+      env->DeleteDir(sub_filedir);
+    }
+    if (options.depart_log) {
+      std::string sub_filedir;
+      std::vector<std::string> sub_filenames;
+      sub_filedir = dbname + "/" + options.log_dir;
+      result = env->GetChildren(sub_filedir, &sub_filenames);
+      for (size_t i = 0; i < sub_filenames.size(); i++) {
+        if (ParseFileName(sub_filenames[i], &number, &type)) {
+          Status del = env->DeleteFile(sub_filedir + "/" + sub_filenames[i]);
+          if (result.ok() && !del.ok()) {
+            result = del;
+          }
+        }
+      }
+      env->DeleteDir(sub_filedir);
     }
     env->UnlockFile(lock);  // Ignore error since state is already gone
     env->DeleteFile(lockname);

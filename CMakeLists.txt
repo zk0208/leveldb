@@ -117,7 +117,7 @@ target_sources(leveldb
     "${PROJECT_SOURCE_DIR}/db/log_writer.h"
     "${PROJECT_SOURCE_DIR}/db/memtable.cc"
     "${PROJECT_SOURCE_DIR}/db/memtable.h"
-    "${PROJECT_SOURCE_DIR}/db/repair.cc"
+    #"${PROJECT_SOURCE_DIR}/db/repair.cc"
     "${PROJECT_SOURCE_DIR}/db/skiplist.h"
     "${PROJECT_SOURCE_DIR}/db/snapshot.h"
     "${PROJECT_SOURCE_DIR}/db/table_cache.cc"

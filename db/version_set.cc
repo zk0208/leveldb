@@ -4,7 +4,7 @@
 
 #include "db/version_set.h"
 
-#include <bits/stdint-uintn.h>
+#include <cstdint>
 #include <stdio.h>
 
 #include <algorithm>
@@ -14,6 +14,7 @@
 #include "db/log_writer.h"
 #include "db/memtable.h"
 #include "db/table_cache.h"
+#include <string>
 #include <sys/types.h>
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
@@ -331,7 +332,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   Slice user_key = k.user_key();
   const Comparator* ucmp = vset_->icmp_.user_comparator();
   Status s;
-
+  
   stats->seek_file = nullptr;
   stats->seek_file_level = -1;
   FileMetaData* last_file_read = nullptr;
@@ -506,6 +507,7 @@ int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
       }
       if (level + 2 < config::kNumLevels) {
         // Check that file does not overlap too many grandparent bytes.
+        //printf("l0 over level+2 : %d\n",level+2);
         GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
         const int64_t sum = TotalFileSize(overlaps);
         if (sum > MaxGrandParentOverlapBytes(vset_->options_)) {
@@ -796,6 +798,7 @@ VersionSet::VersionSet(const std::string& dbname, const Options* options,
                        const InternalKeyComparator* cmp, const uint32_t id)
     : env_(options->env),
       dbname_(dbname),
+      sub_treedir_(dbname_+"/vol"+std::to_string(id+1)),
       options_(options),
       table_cache_(table_cache),
       icmp_(*cmp),
@@ -867,20 +870,22 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   Finalize(v);
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
-  std::string new_manifest_file;
+  //std::string new_manifest_file;
   Status s;
-  if (descriptor_log_ == nullptr) {
-    // No reason to unlock *mu here since we only hit this path in the
-    // first call to LogAndApply (when opening the database).
-    assert(descriptor_file_ == nullptr);
-    new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
-    edit->SetNextFile(next_file_number_);
-    s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
-    if (s.ok()) {
-      descriptor_log_ = new log::Writer(descriptor_file_);
-      s = WriteSnapshot(descriptor_log_);
-    }
-  }
+  // if (descriptor_log_ == nullptr) {
+  //   // No reason to unlock *mu here since we only hit this path in the
+  //   // first call to LogAndApply (when opening the database).
+  //   assert(descriptor_file_ == nullptr);
+  //   printf("one manifest number is %lu\n",manifest_file_number_);
+  //   new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
+  //   printf("create new manifest\n");
+  //   edit->SetNextFile(next_file_number_);
+  //   s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
+  //   if (s.ok()) {
+  //     descriptor_log_ = new log::Writer(descriptor_file_);
+  //     s = WriteSnapshot(descriptor_log_);
+  //   }
+  // }
   // Unlock during expensive MANIFEST log write
   {
     mu->Unlock();
@@ -902,9 +907,10 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     }
     // If we just created a new descriptor file, install it by writing a
     // new CURRENT file that points to it.
-    if (s.ok() && !new_manifest_file.empty()) {
-      s = SetCurrentFile(env_, dbname_, manifest_file_number_);
-    }
+    // if (s.ok() && !new_manifest_file.empty()) {
+    //   printf("change manifest\n"); 
+    //   s = SetCurrentFile(env_, dbname_, manifest_file_number_);
+    // }
 
     mu->Lock();
   }
@@ -914,15 +920,17 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     AppendVersion(v);
     log_number_ = edit->log_number_;
     prev_log_number_ = edit->prev_log_number_;
+    oldest_log_number = edit->oldest_log_number_;
   } else {
     delete v;
-    if (!new_manifest_file.empty()) {
-      delete descriptor_log_;
-      delete descriptor_file_;
-      descriptor_log_ = nullptr;
-      descriptor_file_ = nullptr;
-      env_->DeleteFile(new_manifest_file);
-    }
+    // printf("default manifest\n");
+    // if (!new_manifest_file.empty()) {
+    //   delete descriptor_log_;
+    //   delete descriptor_file_;
+    //   descriptor_log_ = nullptr;
+    //   descriptor_file_ = nullptr;
+    //   env_->DeleteFile(new_manifest_file);
+    // }
   }
 
   return s;
@@ -960,7 +968,73 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
   edit.EncodeTo(&record);
   return log->AddRecord(record);
 }
+Status VersionSet::WriteSnapshot(log::Writer* log,
+                                 std::vector<VersionSet*>& version_sets) {
+  // TODO: Break up into multiple records to reduce memory usage on recovery?
+  Status s;
+  for (size_t i = 0; i < version_sets.size(); i++) {
+    Version* current = version_sets[i]->current_;
+    // Save metadata
+    VersionEdit edit;
+    edit.setSingleTreeID(i);
+    edit.SetLastSequence(version_sets[i]->last_sequence_);
+    edit.SetLogNumber(version_sets[i]->log_number_);
+    edit.SetNextFile(version_sets[i]->next_file_number_);
 
+     // Save compaction pointers
+    for (int level = 0; level < config::kNumLevels; level++) {
+      if (!version_sets[i]->compact_pointer_[level].empty()) {
+        InternalKey key;
+        key.DecodeFrom(version_sets[i]->compact_pointer_[level]);
+        edit.SetCompactPointer(level, key);
+      }
+    }
+
+    // Save files
+    for (int level = 0; level < config::kNumLevels; level++) {
+      const std::vector<FileMetaData*>& files = version_sets[i]->current_->files_[level];
+      for (size_t i = 0; i < files.size(); i++) {
+        const FileMetaData* f = files[i];
+        edit.AddFile(level, f->number, f->file_size, f->smallest, f->largest);
+      }
+    }
+   
+
+    std::string record;
+    edit.EncodeTo(&record);
+    s = log->AddRecord(record);
+  }
+  return s;
+}
+Status VersionSet::InitManifest(Env* const env, const std::string dbname,
+                                std::vector<VersionSet*>& version_sets) {
+  assert(descriptor_log_ == nullptr);
+  // No reason to unlock *mu here since we only hit this path in the
+  // first call to LogAndApply (when opening the database).
+  assert(descriptor_file_ == nullptr);
+  // Initialize new descriptor log file if necessary by creating
+  // a temporary file that contains a snapshot of the current version.
+  std::string new_manifest_file;
+  new_manifest_file = DescriptorFileName(dbname, manifest_file_number_);
+  Status s = env->NewWritableFile(new_manifest_file, &descriptor_file_);
+  if (s.ok()) {
+    descriptor_log_ = new log::Writer(descriptor_file_);
+    s = WriteSnapshot(descriptor_log_, version_sets);
+  }
+
+  // If we just created a new descriptor file, install it by writing a
+  // new CURRENT file that points to it.
+  if (s.ok() && !new_manifest_file.empty()) {
+    s = SetCurrentFile(env, dbname, manifest_file_number_);
+  } else if (!new_manifest_file.empty()) {
+    delete descriptor_log_;
+    delete descriptor_file_;
+    descriptor_log_ = nullptr;
+    descriptor_file_ = nullptr;
+    env->DeleteFile(new_manifest_file);
+  }
+  return s;
+}
 //恢复各个tree的版本信息
 Status VersionSet::Recover(bool* save_manifest, std::vector<VersionSet*>& version_sets) {
   struct LogReporter : public log::Reader::Reporter {
@@ -1197,8 +1271,10 @@ uint64_t VersionSet::ApproximateOffsetOf(Version* v, const InternalKey& ikey) {
         // "ikey" falls in the range for this table.  Add the
         // approximate offset of "ikey" within the table.
         Table* tableptr;
+        ReadOptions read_option =ReadOptions();
+        read_option.read_dir = sub_treedir_;
         Iterator* iter = table_cache_->NewIterator(
-            ReadOptions(), files[i]->number, files[i]->file_size, &tableptr);
+            read_option, files[i]->number, files[i]->file_size, &tableptr);
         if (tableptr != nullptr) {
           result += tableptr->ApproximateOffsetOf(ikey.Encode());
         }
@@ -1283,6 +1359,7 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   ReadOptions options;
   options.verify_checksums = options_->paranoid_checks;
   options.fill_cache = false;
+  options.read_dir = sub_treedir_;
 
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
@@ -1319,7 +1396,8 @@ Compaction* VersionSet::PickCompaction() {
   // We prefer compactions triggered by too much data in a level over
   // the compactions triggered by seeks.
   const bool size_compaction = (current_->compaction_score_ >= 1);
-  const bool seek_compaction = (current_->file_to_compact_ != nullptr);
+  //const bool seek_compaction = (current_->file_to_compact_ != nullptr);
+  const bool seek_compaction = false;
   if (size_compaction) {
     level = current_->compaction_level_;
     assert(level >= 0);
@@ -1453,7 +1531,6 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
 
   AddBoundaryInputs(icmp_, current_->files_[level], &c->inputs_[0]);
   GetRange(c->inputs_[0], &smallest, &largest);
-
   current_->GetOverlappingInputs(level + 1, &smallest, &largest,
                                  &c->inputs_[1]);
 
