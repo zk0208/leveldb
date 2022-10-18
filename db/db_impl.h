@@ -266,7 +266,6 @@ class DBImpl : public DB{
   //log 相关，共用log，需要互斥访问
   WritableFile* logfile_;
   std::string log_dir;
-  std::deque<uint64_t> all_logfile_num GUARDED_BY(mutex_);
   uint64_t logfile_number_ GUARDED_BY(mutex_);
   log::Writer* log_;
   //uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.

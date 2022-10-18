@@ -123,6 +123,7 @@ SingleTree::~SingleTree(){
   delete versions_;
   if (mem_ != nullptr) mem_->Unref();
   if (imm_ != nullptr) imm_->Unref();
+  delete tmp_batch_;
 }
 
 //**** SingleTree read/write interface
@@ -519,7 +520,6 @@ void SingleTree::CompactMemTable() {
   if (s.ok()) {
     edit.SetPrevLogNumber(0);
     //遍历log链表，找到最旧的数下一个
-    //edit.SetOldestLogNumber(db_->all_logfile_num)
     db_->mutex_.Lock();
     edit.SetOldestLogNumber(db_->logfile_number_);
     edit.SetLogNumber(db_->logfile_number_);  // Earlier logs no longer needed
@@ -1181,19 +1181,21 @@ DBImpl::DBImpl(const Options& raw_options, const std::string& dbname)
       shutting_down_(false),
       logfile_(nullptr),
       logfile_number_(0),
-      log_(nullptr) {}
+      log_(nullptr),
+      log_dir("") {}
 
 
 DBImpl::~DBImpl() {
   // Wait for background work to finish.
   Log(options_.info_log, "CLOSE: maybe waiting singleTree");
-  mutex_.Lock();
-  shutting_down_.store(true, std::memory_order_release);
-  mutex_.Unlock();
 
   for (auto singletree : singleTrees_) {
     delete singletree;
   }
+
+  mutex_.Lock();
+  shutting_down_.store(true, std::memory_order_release);
+  mutex_.Unlock();
 
   if (db_lock_ != nullptr) {
     env_->UnlockFile(db_lock_);
@@ -1503,7 +1505,6 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   if (status.ok() && options_.reuse_logs && last_log && compactions == 0) {
     assert(logfile_ == nullptr);
     assert(log_ == nullptr);
-    assert(all_logfile_num.empty());
     for (uint32_t i = 0; i < config::kNumSingleTrees; i++)
       assert(singleTrees_[i]->mem_ == nullptr);
     uint64_t lfile_size;
@@ -1512,7 +1513,6 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
       Log(options_.info_log, "Reusing old log %s \n", fname.c_str());
       log_ = new log::Writer(logfile_, lfile_size);
       logfile_number_ = log_number;
-      all_logfile_num.push_back(log_number);
       for (uint32_t i = 0; i < config::kNumSingleTrees; i++){
         if (mem[i] != nullptr) {
           singleTrees_[i]->mem_ = mem[i];
@@ -1797,7 +1797,6 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
       if (s.ok()) {
         impl->logfile_ = lfile;
         impl->logfile_number_ = new_log_number;
-        impl->all_logfile_num.push_back(new_log_number);
         impl->log_ = new log::Writer(lfile);
       }
       for (uint32_t i = 0; i < config::kNumSingleTrees; i++) {
